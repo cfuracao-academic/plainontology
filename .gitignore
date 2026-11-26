@@ -13,5 +13,6 @@ site/
 *.egg-info/
 examples/*.ttl
 examples/*.yaml
+!examples/*.openapi.yaml
 examples/*.db
 examples/all.onto

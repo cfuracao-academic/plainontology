@@ -1,0 +1,103 @@
+openapi: 3.1.0
+info:
+  title: Library API
+  version: 1.0.0
+  description: A small lending library API, used by the PlainOntology examples and tests.
+paths:
+  /books:
+    get:
+      operationId: listBooks
+      summary: List books in the catalogue, optionally filtered by author.
+      parameters:
+        - name: author
+          in: query
+          description: Part of the author's name.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: The matching books.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Book"
+  /books/{bookId}/loans:
+    parameters:
+      - name: bookId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      operationId: lendBook
+      summary: Lend a book to a member.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [member]
+              properties:
+                member:
+                  type: string
+                  pattern: "^C-[0-9]+$"
+                  description: Library card number.
+                due:
+                  type: string
+                  format: date
+      responses:
+        "201":
+          description: The new loan.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Loan"
+components:
+  schemas:
+    Book:
+      type: object
+      description: A title the library holds; one record per edition.
+      required: [id, title]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+          maxLength: 300
+        isbn:
+          type: string
+          minLength: 13
+          maxLength: 13
+        author:
+          $ref: "#/components/schemas/Author"
+    Author:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        born:
+          type: string
+          format: date
+    Loan:
+      type: object
+      required: [id, book, member]
+      properties:
+        id:
+          type: integer
+        book:
+          $ref: "#/components/schemas/Book"
+        member:
+          type: string
+        status:
+          type: string
+          enum: [open, returned, lost]
