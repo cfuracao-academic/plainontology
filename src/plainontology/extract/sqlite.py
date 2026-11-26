@@ -58,14 +58,21 @@ def _connect(path: Path) -> sqlite3.Connection:
         # A schema file loads in milliseconds; stop one that runs away, whether in one
         # endless statement (progress handler) or in many slow ones (timer, whole script).
         con.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1_000)
-        timer = threading.Timer(SCRIPT_SECONDS, con.interrupt)
+        fired = threading.Event()
+
+        def stop() -> None:
+            fired.set()
+            con.interrupt()
+
+        timer = threading.Timer(SCRIPT_SECONDS, stop)
         timer.daemon = True
         timer.start()
         try:
             con.executescript(path.read_text(encoding="utf-8-sig"))
         except sqlite3.DatabaseError as exc:
             con.close()
-            reason = f"stopped after {SCRIPT_SECONDS} seconds" if time.monotonic() >= deadline else str(exc)
+            late = fired.is_set() or time.monotonic() >= deadline
+            reason = f"stopped after {SCRIPT_SECONDS} seconds" if late else str(exc)
             raise ValueError(f"{path.name}: {reason}") from None
         finally:
             timer.cancel()
