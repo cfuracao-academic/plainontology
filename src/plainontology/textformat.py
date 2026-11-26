@@ -159,8 +159,6 @@ def loads(text: str) -> Ontology:
             except ValueError as exc:
                 raise ParseError(no, str(exc), raw) from None
             statement.raw = typed
-            if statement.kind == "comment":  # a comment keeps its indentation too
-                statement.raw, statement.verbatim = raw, True
             statement.blank_before = gap
             under_prop = last_prop is not None and indent > prop_indent
             if statement.kind == "comment" and last_prop is not None and not under_prop:
@@ -191,12 +189,6 @@ def loads(text: str) -> Ontology:
                 last_prop, prop_indent = statement, indent
             elif statement.kind != "comment":
                 last_prop = None
-            continue
-        if held and current is not None and line.startswith("#"):
-            # A column-0 comment among held ones: it waits with them, in file order.
-            comment = parse_statement(line)
-            comment.raw, comment.col0, comment.blank_before = typed, True, gap
-            held.append(comment)
             continue
         if held and current is not None:
             current.statements.extend(held)
@@ -270,15 +262,25 @@ def loads(text: str) -> Ontology:
     return onto
 
 
-def _lead(statement: Statement, indent: str) -> str:
-    """Statement lines are written two spaces per level; comments as typed."""
-    return "" if statement.col0 or (statement.verbatim and not statement.is_auto) else indent
+def _lead(statement: Statement, indent: str, tail: bool = False) -> str:
+    """Every line, comments included, is written at the indentation of where it
+    belongs: two spaces per level. A comment typed at the start of the line stays
+    there, unless it is the last line of its block (then it would read back as
+    belonging to what follows, so it is indented)."""
+    return "" if statement.col0 and not tail else indent
 
 
-def dump_statement(statement: Statement, indent: str = "  ") -> list[str]:
-    lines = [""] * statement.blank_before + [f"{_lead(statement, indent)}{statement.text()}"]
-    for c in statement.children:
-        lines += [""] * c.blank_before + [f"{_lead(c, indent + '  ')}{c.text()}"]
+def _tail_start(lines: list[Statement]) -> int:
+    """Index of the first of the comments that end a block (after its last statement)."""
+    last = max((i for i, s in enumerate(lines) if s.kind != "comment"), default=-1)
+    return last + 1
+
+
+def dump_statement(statement: Statement, indent: str = "  ", tail: bool = False) -> list[str]:
+    lines = [""] * statement.blank_before + [f"{_lead(statement, indent, tail)}{statement.text()}"]
+    end = _tail_start(statement.children)
+    for i, c in enumerate(statement.children):
+        lines += [""] * c.blank_before + [f"{_lead(c, indent + '  ', i >= end)}{c.text()}"]
     return lines
 
 
@@ -288,8 +290,9 @@ def dump_concept(concept: Concept) -> list[str]:
     if concept.raw_header and _split_tag(concept.raw_header)[1] == concept.tag:
         header = concept.raw_header
     lines.append(header)
-    for s in concept.statements:
-        lines.extend(dump_statement(s))
+    end = _tail_start(concept.statements)
+    for i, s in enumerate(concept.statements):
+        lines.extend(dump_statement(s, tail=i >= end))
     return lines
 
 
@@ -342,16 +345,17 @@ def load(path: str | Path) -> Ontology:
 
 
 def _shape(onto: Ontology) -> list:
-    """Which line sits under which concept and property (comments aside): what a
+    """Which line, comments included, sits under which concept and property: what a
     write must never change."""
+
+    def key(s: Statement) -> tuple:
+        return (s.kind, s.value.strip()) if s.kind == "comment" else (s.kind, s.name)
+
     return [
         (
             c.name,
-            [
-                (s.kind, s.name, [(ch.kind, ch.name) for ch in s.children if ch.kind != "comment"])
-                for s in c.statements
-                if s.kind != "comment"
-            ],
+            [x.strip() for x in c.leading_comments if x.strip()],
+            [(key(s), [key(ch) for ch in s.children]) for s in c.statements],
         )
         for c in onto.concepts.values()
     ]

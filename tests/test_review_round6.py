@@ -79,7 +79,7 @@ def test_save_refuses_a_write_that_would_change_the_structure(tmp_path, monkeypa
 def test_comments_keep_their_order(tmp_path):
     for text in (
         "concept C0\n  has a : text\n# col0 comment\n  # indented comment\n  is_a Other\n",
-        'concept C0\n  has a : text\n  # indented\n# col0\n    note "x"\n',
+        "concept B\n  has a : text\n  # TODO: add subtitle\n\n# about tags\nconcept Tag\n  has b : text\n",
     ):
         assert dumps(loads(text)) == text
 
@@ -165,7 +165,8 @@ def test_more_singular_names(plural, single):
     assert singular(plural) == single
 
 
-def test_shape_ignores_comments():
-    a = loads("concept A\n  # c\n  has x : text\n")
-    b = loads("concept A\n  has x : text\n")
-    assert _shape(a) == _shape(b)
+def test_shape_includes_where_comments_sit():
+    a = loads("concept A\n  has x : text\n  # c\n  has y : text\n")  # a comment on the concept
+    b = loads("concept A\n  has x : text\n    # c\n  has y : text\n")  # a comment under x
+    assert _shape(a) != _shape(b)
+    assert _shape(loads(dumps(a))) == _shape(a) and _shape(loads(dumps(b))) == _shape(b)

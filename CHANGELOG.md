@@ -27,6 +27,16 @@
 
 **Upgrading from 0.1.x**: singular concept names are better (`movies` is `Movie`, not `Movy`; `shelves` is `Shelf`). A concept whose name changes this way is matched by rename detection when it has two or more properties; otherwise the first refresh reports it as removed (or kept, with your lines) and added. Run `plainonto drift` after upgrading and use `plainonto rename FILE Old New` where needed.
 
+**Fixes from a seventh independent review**
+- A comment written at the start of a line above a concept stays that concept's comment; it is no longer pulled into the concept before it
+- Comments are written at the level of the lines around them, so a comment between two properties can never end up under one of them; `save` now also refuses a write that would move a comment
+- A comment above a property the sources drop stays in its concept
+- Lines of yours handed over from a line that gives way are merged (yours win), so the first refresh writes the final result
+- Migration scripts: a dropped or re-created table, a dropped column and a renamed column keep the constraint names right; `DROP INDEX schema.name` touches only that schema
+- `CHECK (rule OR col IS NOT NULL)` stays a note
+- A network-share source is refused before it is touched when `PLAINONTO_SOURCE_ROOT` is set
+- MySQL `float unsigned` and `double unsigned` columns are read; `leaves` stays `Leave`
+
 **Fixes from a sixth independent review**
 - Writing a file never moves a line under a different concept or property: statement lines are always written two spaces per level, and `save` refuses any write whose structure would read back differently
 - Comments at the start of a line and indented comments keep their order
@@ -35,7 +45,7 @@
 - CHECKs written `rule OR col IS NULL` and reversed comparisons (`8 = char_length(c)`) become rules
 - A property kept because the match was unclear names the possible new names and the `rename` command
 - JSON Schema references to absolute paths or network shares are not followed
-- More singular names: menus, diagnoses, vertices, matrices, shelves, leaves and similar
+- More singular names: menus, diagnoses, vertices, matrices, shelves, knives and similar
 
 **Fixes from a fifth independent review**
 - A concept renamed in its source (a retitled Pydantic model) gets its new header; before, the old name stayed and every later `drift` reported the rename again

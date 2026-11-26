@@ -78,7 +78,7 @@ def _without_null_branch(node):
         return node
     for rule, other in ((node.this, node.expression), (node.expression, node.this)):
         other = _strip(other) if isinstance(other, exp.Paren) else other
-        is_null = isinstance(other, exp.Is) and isinstance(other.expression, exp.Null)
+        is_null = isinstance(other, exp.Is) and isinstance(other.expression, exp.Null) and not other.args.get("negate")
         if is_null and (col := _column(other.this)) and {c.name for c in rule.find_all(exp.Column)} == {col}:
             return rule
     return node

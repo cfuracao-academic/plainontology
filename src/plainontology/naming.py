@@ -54,7 +54,6 @@ _IRREGULAR = {
     "matrices": "matrix",
     "appendices": "appendix",
     "shelves": "shelf",
-    "leaves": "leaf",
     "halves": "half",
     "calves": "calf",
     "wolves": "wolf",

@@ -387,7 +387,11 @@ def test_people_text_is_kept_byte_for_byte_through_a_write(tmp_path):
     server = build_server(f, allow_proposals=True)
     asyncio.run(server.call_tool("propose", {"concept": "A", "line": 'synonym "Aye"'}))
     after = f.read_bytes().decode("utf-8")
-    assert after == text.replace("  has y : text\n", '  has y : text\n  synonym "Aye" [proposed: agent]\n')
+    # Comments are written at the level of the lines they sit among.
+    expected = text.replace("      # deep comment", "    # deep comment").replace(
+        "  # why x has a French label:", "    # why x has a French label:"
+    )
+    assert after == expected.replace("  has y : text\n", '  has y : text\n  synonym "Aye" [proposed: agent]\n')
 
 
 def test_sqlite_script_time_limit_covers_many_slow_statements(tmp_path, monkeypatch):

@@ -227,7 +227,11 @@ def _merge_lines(
         line = placed_line.get(s.key())
         yours_under = [c for c in s.children if not c.is_auto]
         if line is not None and yours_under:
-            line.children += copy.deepcopy(yours_under)
+            # Merged, not appended: a line of yours wins over an extracted one of the same key.
+            match = fresh.get(s.key())
+            line.children = _merge_children(
+                [*line.children, *copy.deepcopy(yours_under)], match.children if match else [], where, DriftReport()
+            )
 
     for s in old:
         key = s.key()
@@ -249,10 +253,10 @@ def _merge_lines(
             mine = copy.deepcopy(s)
             if s.is_property:
                 match = fresh.get(key)
+                handed = copy.deepcopy(orphans.pop(key, []))  # from the extracted line you overrode
                 mine.children = _merge_children(
-                    s.children, match.children if match else [], f"{where}.{s.name}", report
+                    [*s.children, *handed], match.children if match else [], f"{where}.{s.name}", report
                 )
-                mine.children += copy.deepcopy(orphans.pop(key, []))
             merged.append(mine)
             continue
         if key in your_keys:

@@ -90,6 +90,7 @@ _ALTER_TYPE = re.compile(
     re.I,
 )
 _UNSIGNED = {"UTINYINT", "USMALLINT", "UMEDIUMINT", "UINT", "UBIGINT", "UDECIMAL", "UDOUBLE", "UFLOAT"}
+_FLOAT_UNSIGNED = re.compile(r"\b((?:FLOAT|DOUBLE(?:\s+PRECISION)?|REAL)(?:\s*\([^)]*\))?)\s+UNSIGNED\b", re.I)
 _WITH_DATA = re.compile(r"\bWITH\s+(?:NO\s+)?DATA\s*;", re.I)
 # MySQL view modifiers the SQL parser does not know; they change nothing about the columns.
 _MYSQL_VIEW_MODIFIERS = re.compile(
@@ -412,6 +413,11 @@ class _Reader:
             fk.columns = swap(fk.columns)
         t.unique = {new if c == old else c for c in t.unique}
         t.unique_sets = [swap(u) for u in t.unique_sets]
+        for key, (kind, value) in list(self.constraint_names.items()):
+            if key[0] == t.name and kind == "unique" and value == old:
+                self.constraint_names[key] = (kind, new)
+            elif key[0] == t.name and kind == "unique_set" and isinstance(value, list) and old in value:
+                self.constraint_names[key] = (kind, swap(value))
         # A CHECK follows the column, as the database rewrites it.
         renamed = {sql: self._rename_in_check(sql, old, new) for sql in t.checks if old in self._check_columns(sql)}
         t.checks = [renamed.get(sql, sql) for sql in t.checks]
@@ -426,6 +432,22 @@ class _Reader:
         t.unique.discard(name)
         t.unique_sets = [u for u in t.unique_sets if name not in u]
         t.checks = [sql for sql in t.checks if name not in self._check_columns(sql)]  # dropped with the column
+        for key, (kind, value) in list(self.constraint_names.items()):
+            if key[0] != t.name:
+                continue
+            gone = (
+                (kind == "unique" and value == name)
+                or (kind == "unique_set" and isinstance(value, list) and name in value)
+                or (kind == "fk" and isinstance(value, ForeignKey) and name in value.columns)
+                or (kind == "check" and isinstance(value, str) and name in self._check_columns(value))
+            )
+            if gone:
+                del self.constraint_names[key]
+
+    def forget_constraints(self, table: str) -> None:
+        for key in [k for k in self.constraint_names if k[0] == table]:
+            del self.constraint_names[key]
+        self.check_count.pop(table, None)
 
     def rename_table(self, old: str, new: str) -> None:
         if old not in self.tables:
@@ -502,6 +524,7 @@ class _Reader:
             if node.args.get("exists"):  # CREATE TABLE IF NOT EXISTS keeps the existing table
                 return
             self.tables[name] = Table(name)
+            self.forget_constraints(name)
         t = self.table(name)
         for item in schema.expressions:
             if isinstance(item, exp.LikeProperty):
@@ -606,19 +629,30 @@ class _Reader:
             cluster = node.args.get("cluster")  # MySQL: DROP INDEX name ON table
             owner = self.qual(cluster.this) if cluster is not None and cluster.this is not None else None
             for dropped in node.args.get("tables") or []:
-                self.drop_index(dropped.name, owner)
+                db = dropped.args.get("db")
+                self.drop_index(dropped.name, owner, db.name if db is not None and self.dialect != "mysql" else None)
         elif isinstance(node, exp.Command) and str(node.this).upper() == "ALTER":
             self.alter_command(str(node.expression or ""))
         elif isinstance(node, exp.Drop) and (node.args.get("kind") or "").upper() in ("TABLE", "VIEW"):
             for target in node.args.get("tables") or []:
                 name = self.qual(target)
                 self.tables.pop(name, None)
+                self.forget_constraints(name)
                 self.views = [(n, q) for n, q in self.views if n != name]
                 self.table_comments.pop(name, None)
 
-    def drop_index(self, name: str, table: str | None) -> None:
-        """DROP INDEX: undo a unique index (other indexes do not change the file)."""
-        owners = [table] if table else [tn for (tn, cn) in self.constraint_names if cn == name.lower()]
+    def drop_index(self, name: str, table: str | None, schema: str | None = None) -> None:
+        """DROP INDEX: undo a unique index (other indexes do not change the file).
+        Index names are per schema in PostgreSQL: only tables of that schema match."""
+        if schema is not None and schema.lower() in self.defaults:
+            schema = None
+
+        def in_schema(owner: str) -> bool:
+            return (owner.rsplit(".", 1)[0] if "." in owner else None) == schema
+
+        owners = (
+            [table] if table else [tn for (tn, cn) in self.constraint_names if cn == name.lower() and in_schema(tn)]
+        )
         for owner in owners:
             if owner in self.tables and (owner, name.lower()) in self.constraint_names:
                 self.drop_constraint(self.tables[owner], name)
@@ -800,6 +834,7 @@ class _Reader:
             sql = _DELIMITER.sub("", sql).replace(";;", ";")
             sql = _MYSQL_VIEW_MODIFIERS.sub(lambda m: f"CREATE {m[1] or ''}VIEW", sql)
             sql = _CHARSET_INTRODUCER.sub("'", sql)  # _utf8mb4'text' is just 'text'
+            sql = _FLOAT_UNSIGNED.sub(r"\1 /*unsigned*/", sql)  # the parser does not take float unsigned
         if self.dialect == "postgres":
             sql = _E_STRING.sub(_plain_string, sql)  # E'\\d' is '\d'
         # CREATE MATERIALIZED VIEW ... WITH [NO] DATA: the parser stops at the data clause.

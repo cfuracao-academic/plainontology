@@ -42,6 +42,9 @@ def within_root(path: Path) -> Path:
     """With PLAINONTO_SOURCE_ROOT set (the GitHub Action sets it to the checkout),
     a source file must be inside that folder."""
     root = os.environ.get("PLAINONTO_SOURCE_ROOT")
+    if root and str(path).startswith(("\\\\", "//")):
+        # A network share is refused before anything touches it (resolving would connect).
+        raise ValueError(f"source file {path} is a network path, outside {root} (PLAINONTO_SOURCE_ROOT)")
     if root:
         resolved, top = path.resolve(), Path(root).resolve()
         if resolved != top and top not in resolved.parents:
