@@ -179,3 +179,23 @@ def test_env_source_is_stored_as_given(examples, monkeypatch):
     assert "Author" in onto.concepts
     monkeypatch.delenv("LIBRARY_DB")
     assert main(["drift", "live.onto"]) == 2  # clear error, not a crash
+
+
+def test_alter_table_migrations():
+    ddl = """
+    CREATE TABLE public.books (id integer PRIMARY KEY, title text NOT NULL, pages integer, author_id integer);
+    CREATE TABLE public.authors (id integer PRIMARY KEY, name text);
+    ALTER TABLE public.books ADD CONSTRAINT books_author_fk FOREIGN KEY (author_id) REFERENCES public.authors(id);
+    ALTER TABLE public.books ADD COLUMN edition integer CHECK (edition >= 1);
+    ALTER TABLE public.books DROP COLUMN pages;
+    ALTER TABLE public.books RENAME COLUMN title TO headline;
+    ALTER TABLE public.authors RENAME TO writers;
+    """
+    concepts = _lines(tables_to_concepts(tables_from_ddl(ddl, "postgres"), "postgres"))
+    assert concepts["Book"] == ["has id : integer key", "has headline : text required", "has edition : integer",
+                                "  min 1", "author -> Writer"]
+    assert "Writer" in concepts and "Author" not in concepts
+    mysql = "CREATE TABLE `books` (`id` int PRIMARY KEY, `title` varchar(30) NOT NULL);\n" \
+            "ALTER TABLE `books` CHANGE `title` `headline` varchar(300) NOT NULL;"
+    assert _lines(tables_to_concepts(tables_from_ddl(mysql, "mysql"), "mysql"))["Book"] == [
+        "has id : integer key", "has headline : text required", "  length ..300"]

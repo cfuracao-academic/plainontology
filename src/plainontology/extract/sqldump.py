@@ -3,7 +3,8 @@
 Works on ``pg_dump --schema-only`` and ``mysqldump --no-data`` output as well
 as hand-written DDL:
 
-* CREATE TABLE and ALTER TABLE ... ADD CONSTRAINT (keys, foreign keys,
+* CREATE TABLE and ALTER TABLE (ADD, DROP, RENAME, CHANGE and MODIFY COLUMN,
+  RENAME TO, ADD CONSTRAINT for keys, foreign keys,
   unique, CHECK), CREATE UNIQUE INDEX
 * COMMENT ON TABLE / VIEW / COLUMN (PostgreSQL), column ``COMMENT '...'`` and
   table ``COMMENT='...'`` (MySQL)
@@ -160,6 +161,97 @@ class _Reader:
         elif isinstance(node, exp.CheckColumnConstraint) and node.this is not None:
             t.checks.append(node.this.sql(self.dialect))
 
+    def column(self, t: Table, item) -> Column:
+        kind_node = item.args.get("kind")
+        datatype, many, length = self.datatype(kind_node)
+        col = Column(item.name, datatype, many=many, max_length=length)
+        if kind_node is not None and getattr(kind_node.this, "name", "") == "USERDEFINED":
+            domain = self.domains.get(kind_node.sql(self.dialect).split(".")[-1].strip('"`').lower())
+            if domain:
+                col.pattern = domain[2]
+        for c in item.args.get("constraints") or []:
+            kind = c.args.get("kind")
+            if isinstance(kind, exp.NotNullColumnConstraint) and not kind.args.get("allow_null"):
+                col.not_null = True
+            elif isinstance(kind, exp.PrimaryKeyColumnConstraint):
+                t.primary_key = [item.name]
+            elif isinstance(kind, exp.UniqueColumnConstraint):
+                t.unique.add(item.name)
+            elif isinstance(kind, exp.Reference) and kind.this is not None:
+                t.foreign_keys.append(ForeignKey([item.name], self.qual(kind.this)))
+            elif isinstance(kind, exp.CommentColumnConstraint) and kind.this is not None:
+                col.comment = kind.this.name
+            elif isinstance(kind, exp.CheckColumnConstraint) and kind.this is not None:
+                t.checks.append(kind.this.sql(self.dialect))
+        return col
+
+    def put_column(self, t: Table, col: Column, replace: str | None = None) -> None:
+        """Add a column, or replace the column named ``replace`` (default: the same name)."""
+        old = replace or col.name
+        for i, existing in enumerate(t.columns):
+            if existing.name == old:
+                t.columns[i] = col
+                if old != col.name:
+                    self.rename_column(t, old, col.name, keep_column=True)
+                return
+        t.columns.append(col)
+
+    def rename_column(self, t: Table, old: str, new: str, keep_column: bool = False) -> None:
+        if not keep_column:
+            for col in t.columns:
+                if col.name == old:
+                    col.name = new
+        swap = lambda cols: [new if c == old else c for c in cols]  # noqa: E731
+        t.primary_key = swap(t.primary_key)
+        for fk in t.foreign_keys:
+            fk.columns = swap(fk.columns)
+        t.unique = {new if c == old else c for c in t.unique}
+        t.unique_sets = [swap(u) for u in t.unique_sets]
+
+    def drop_column(self, t: Table, name: str) -> None:
+        t.columns = [c for c in t.columns if c.name != name]
+        t.primary_key = [c for c in t.primary_key if c != name]
+        t.foreign_keys = [fk for fk in t.foreign_keys if name not in fk.columns]
+        t.unique.discard(name)
+        t.unique_sets = [u for u in t.unique_sets if name not in u]
+
+    def rename_table(self, old: str, new: str) -> None:
+        if old not in self.tables:
+            return
+        t = self.tables.pop(old)
+        t.name = new
+        self.tables[new] = t
+        for other in self.tables.values():
+            for fk in other.foreign_keys:
+                if fk.table == old:
+                    fk.table = new
+
+    def alter(self, node) -> None:
+        name = self.qual(node.this)
+        t = self.table(name)
+        for action in node.args.get("actions") or []:
+            if isinstance(action, getattr(exp, "AddConstraint", ())):
+                for item in action.expressions:
+                    self.constraint(t, item)
+            elif isinstance(action, exp.ColumnDef):  # ADD COLUMN
+                self.put_column(t, self.column(t, action))
+            elif isinstance(action, getattr(exp, "ModifyColumn", ())) and isinstance(action.this, exp.ColumnDef):
+                old = action.args.get("rename_from")  # MySQL CHANGE old new ... / MODIFY
+                self.put_column(t, self.column(t, action.this), old.name if old is not None else None)
+            elif isinstance(action, exp.Drop) and (action.args.get("kind") or "").upper() == "COLUMN":
+                for target in action.args.get("tables") or []:
+                    self.drop_column(t, target.name)
+            elif isinstance(action, getattr(exp, "RenameColumn", ())):
+                self.rename_column(t, action.this.name, action.args["to"].name)
+            elif isinstance(action, getattr(exp, "AlterRename", ())) and action.this is not None:
+                schema = node.this.args.get("db")
+                new = qualified(schema.name if schema is not None and self.dialect != "mysql" else None,
+                                action.this.name, self.defaults)
+                self.rename_table(name, new)
+                t = self.tables[new]
+            else:
+                self.constraint(t, action)
+
     def create_table(self, node) -> None:
         schema = node.this
         t = self.table(self.qual(schema))
@@ -167,28 +259,7 @@ class _Reader:
             if not isinstance(item, exp.ColumnDef):
                 self.constraint(t, item)
                 continue
-            kind_node = item.args.get("kind")
-            datatype, many, length = self.datatype(kind_node)
-            col = Column(item.name, datatype, many=many, max_length=length)
-            if kind_node is not None and getattr(kind_node.this, "name", "") == "USERDEFINED":
-                domain = self.domains.get(kind_node.sql(self.dialect).split(".")[-1].strip('"`').lower())
-                if domain:
-                    col.pattern = domain[2]
-            for c in item.args.get("constraints") or []:
-                kind = c.args.get("kind")
-                if isinstance(kind, exp.NotNullColumnConstraint) and not kind.args.get("allow_null"):
-                    col.not_null = True
-                elif isinstance(kind, exp.PrimaryKeyColumnConstraint):
-                    t.primary_key = [item.name]
-                elif isinstance(kind, exp.UniqueColumnConstraint):
-                    t.unique.add(item.name)
-                elif isinstance(kind, exp.Reference) and kind.this is not None:
-                    t.foreign_keys.append(ForeignKey([item.name], self.qual(kind.this)))
-                elif isinstance(kind, exp.CommentColumnConstraint) and kind.this is not None:
-                    col.comment = kind.this.name
-                elif isinstance(kind, exp.CheckColumnConstraint) and kind.this is not None:
-                    t.checks.append(kind.this.sql(self.dialect))
-            t.columns.append(col)
+            t.columns.append(self.column(t, item))
         properties = node.args.get("properties")
         for prop in (properties.expressions if properties else []):
             if isinstance(prop, exp.SchemaCommentProperty) and prop.this is not None:
@@ -220,13 +291,7 @@ class _Reader:
                     else:
                         t.unique_sets.append(cols)
         elif isinstance(node, getattr(exp, "Alter", getattr(exp, "AlterTable", ()))):
-            t = self.table(self.qual(node.this))
-            for action in node.args.get("actions") or []:
-                if isinstance(action, getattr(exp, "AddConstraint", ())):
-                    for item in action.expressions:
-                        self.constraint(t, item)
-                else:
-                    self.constraint(t, action)
+            self.alter(node)
         elif isinstance(node, exp.Comment) and node.args.get("expression") is not None:
             kind = (node.args.get("kind") or "").upper()
             text = node.args["expression"].name

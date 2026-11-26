@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import re
 
-from .sqlmodel import Column, ForeignKey, Table, enum_type, map_type, qualified
+from .sqlmodel import Column, ForeignKey, Table, declared_length, enum_type, map_type, qualified
 
 _DRIVERS = {
     "postgresql://": "postgresql+psycopg://",
@@ -63,16 +63,23 @@ def resolve_url(location: str) -> str:
     return with_driver(location)
 
 
-def _datatype(sqltype, dialect) -> tuple[str, bool, int | None, str]:
-    """(datatype, many, max length, pattern) for a reflected column type."""
+def _datatype(sqltype, dialect, domains: dict[str, str] | None = None) -> tuple[str, bool, int | None, str]:
+    """(datatype, many, max length, pattern) for a reflected column type.
+
+    ``domains`` maps PostgreSQL domain names to their declared type text
+    (``character varying(10)``): SQLAlchemy's DOMAIN type drops the length.
+    """
     import sqlalchemy as sa
 
     if isinstance(sqltype, sa.Enum) and sqltype.enums:
         return enum_type(list(sqltype.enums)), False, None, ""
     if isinstance(sqltype, sa.ARRAY):
-        return _datatype(sqltype.item_type, dialect)[0], True, None, ""
+        return _datatype(sqltype.item_type, dialect, domains)[0], True, None, ""
     if getattr(sqltype, "data_type", None) is not None and type(sqltype).__name__ == "DOMAIN":
-        datatype, many, length, pattern = _datatype(sqltype.data_type, dialect)
+        datatype, many, length, pattern = _datatype(sqltype.data_type, dialect, domains)
+        declared = (domains or {}).get(str(getattr(sqltype, "name", "")).lower())
+        if length is None and declared:
+            length = declared_length(declared)
         if getattr(sqltype, "check", None) is not None:
             from .sqlcheck import analyse
 
@@ -125,11 +132,12 @@ def _triggers(conn, dialect_name: str, schema: str | None) -> dict[str, list[str
     return found
 
 
-def _read(insp, conn, engine, name: str, schema: str | None, default: str | None, kind: str, triggers) -> Table:
+def _read(insp, conn, engine, name: str, schema: str | None, default: str | None, kind: str, triggers,
+          domains: dict[str, str]) -> Table:
     defaults = (default.lower(),) if default else ()
     t = Table(qualified(schema, name, defaults), kind=kind)
     for col in insp.get_columns(name, schema=schema):
-        datatype, many, length, pattern = _datatype(col["type"], engine.dialect)
+        datatype, many, length, pattern = _datatype(col["type"], engine.dialect, domains)
         if kind == "view":  # views report types and lengths only, as the dump reader does
             t.columns.append(Column(col["name"], datatype, False, many, "", length))
             continue
@@ -173,9 +181,13 @@ def tables_from_database(url: str) -> list[Table]:
     try:
         insp = sa.inspect(engine)
         default = insp.default_schema_name
+        domains: dict[str, str] = {}
         if engine.dialect.name == "postgresql":
             schemas = [s for s in insp.get_schema_names() if not _PG_SYSTEM.match(s)]
             schemas.sort(key=lambda s: (s != default, s))
+            for d in _safe(lambda: insp.get_domains(schema="*"), []) or []:
+                if d.get("name") and d.get("type"):
+                    domains[str(d["name"]).lower()] = str(d["type"])
         else:
             schemas = [None]
         tables: list[Table] = []
@@ -183,9 +195,9 @@ def tables_from_database(url: str) -> list[Table]:
             for schema in schemas:
                 triggers = _safe(lambda: _triggers(conn, engine.dialect.name, schema), {})
                 for name in insp.get_table_names(schema=schema):
-                    tables.append(_read(insp, conn, engine, name, schema, default, "table", triggers))
+                    tables.append(_read(insp, conn, engine, name, schema, default, "table", triggers, domains))
                 for name in _safe(lambda: insp.get_view_names(schema=schema), []):
-                    tables.append(_read(insp, conn, engine, name, schema, default, "view", triggers))
+                    tables.append(_read(insp, conn, engine, name, schema, default, "view", triggers, domains))
         return tables
     finally:
         engine.dispose()

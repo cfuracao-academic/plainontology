@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "docs" / "demo.gif"
 
-W, H = 960, 560
+W, H = 960, 620
 PAD_X, TOP, LINE_H, FONT_SIZE = 26, 58, 24, 17
 ROWS = (H - TOP - 14) // LINE_H
 
@@ -188,38 +188,45 @@ def block(work: Path, name: str) -> list[str]:
 def main() -> None:
     work = Path(tempfile.mkdtemp(prefix="plainonto-demo-"))
     try:
-        shutil.copy(ROOT / "examples" / "library.sql", work / "library.sql")
+        shutil.copy(ROOT / "examples" / "library.postgres.sql", work / "library.postgres.sql")
         s = Screen()
         show_book = "sed -n '/concept Book/,/^$/p' library.onto"
 
-        s.card("PlainOntology", "your system's ontology, as one plain text file", "extract, edit, refresh: your lines stay", 2600)
+        s.card("PlainOntology", "your system's ontology, as one plain text file",
+               "PostgreSQL, MySQL, SQLite, JSON Schema, AI agent tools", 2600)
 
-        s.type("plainonto init library.onto --from sqlite:library.sql")
-        out, _ = run(work, "init", "library.onto", "--from", "sqlite:library.sql")
+        s.type("plainonto init library.onto --from postgres:library.postgres.sql")
+        out, _ = run(work, "init", "library.onto", "--from", "postgres:library.postgres.sql")
         s.show([output_line(l) for l in out], 900)
         s.type(show_book)
         s.show([onto_line(l) for l in block(work, "Book")], 2600)
+        s.type("# comments, CHECKs and lengths came from the database")
+        s.hold(1800)
 
         # A person adds meaning to the extracted structure.
         path = work / "library.onto"
         text = path.read_text(encoding="utf-8")
-        mine = '  definition "A title the library holds; one record per edition."\n  synonym "Title"\n  same_as schema:Book\n'
-        anchor = "  tags -> Tag many [auto: via book_tags]\n"
-        path.write_text(text.replace(anchor, anchor + mine), encoding="utf-8", newline="\n")
+        isbn = '  has isbn : text unique "ISBN-13 without hyphens." [auto]\n    length ..13 [auto]\n'
+        tags = "  tags -> Tag many [auto: via book_tags]\n"
+        assert isbn in text and tags in text
+        text = text.replace(isbn, isbn + '    label "ISBN"\n')
+        text = text.replace(tags, tags + '  label "Livre"@fr\n  synonym "Title"\n  same_as schema:Book\n')
+        path.write_text(text, encoding="utf-8", newline="\n")
         s.clear()
         s.type("# add meaning in any editor: untagged lines are yours")
         s.type(show_book)
-        s.show([onto_line(l) for l in block(work, "Book")], 3000)
+        s.show([onto_line(l) for l in block(work, "Book")], 3200)
 
         # The system changes underneath.
         s.clear()
         s.type("# the database changes")
-        sql = work / "library.sql"
-        sql.write_text(sql.read_text(encoding="utf-8") + "ALTER TABLE books ADD COLUMN pages INTEGER;\n", encoding="utf-8")
-        s.type('echo "ALTER TABLE books ADD COLUMN pages INTEGER;" >> library.sql')
+        change = "ALTER TABLE books ADD edition int CHECK (edition > 0);"
+        sql = work / "library.postgres.sql"
+        sql.write_text(sql.read_text(encoding="utf-8") + change + "\n", encoding="utf-8", newline="\n")
+        s.type(f'echo "{change}" >> library.postgres.sql')
         s.type("plainonto drift library.onto")
         out, code = run(work, "drift", "library.onto")
-        s.show([output_line(l) for l in out], 1200)
+        s.show([output_line(l) for l in out], 1300)
         s.type(f"# exit code {code}: a CI check fails until you refresh")
         s.hold(1200)
         s.type("plainonto refresh library.onto")
@@ -228,8 +235,8 @@ def main() -> None:
 
         s.clear()
         s.type(show_book)
-        s.show([onto_line(l) for l in block(work, "Book")], 3200)
-        s.type("# your lines kept, the new column added")
+        s.show([onto_line(l) for l in block(work, "Book")], 3400)
+        s.type("# your lines kept, the new column added with its rule")
         s.hold(2000)
 
         s.card("Try it: pip install plainontology", "plainonto init my.onto --from sqlite:my.db",
