@@ -97,6 +97,8 @@ Sources are written `KIND:LOCATION` and stored in the file; file paths are relat
 | join tables | a `many` relation; a join table with extra columns also stays a concept |
 | triggers | notes |
 | `ALTER TABLE` (add, drop, rename and change columns, rename tables) | applied in order, so a folder of migration scripts concatenated into one file works as a dump |
+| partitions | fold into the parent table with a note; foreign keys declared on partitions carry up |
+| anything the parser cannot read | reported as a `?` warning, never dropped silently; a table is read column by column so one odd column cannot hide it |
 
 Everything else in a dump (`SET`, data, functions) is skipped. For a live database:
 
@@ -136,6 +138,17 @@ repos:
 ```
 
 All inputs are in [docs/ci.md](docs/ci.md). Editors: a [VS Code extension](editors/vscode) highlights `.onto` files.
+
+## Tried on real schemas
+
+CI extracts two public sample databases at pinned versions on every push:
+
+| Schema | Result |
+|---|---|
+| [Pagila](https://github.com/devrimgunduz/pagila) (PostgreSQL) | 24 concepts from 71 tables: 55 monthly partitions fold into `Payment`, foreign keys declared on partitions carry up, a PostgreSQL 18 virtual column is read; no warnings, `check --strict` clean |
+| [Sakila](https://github.com/jOOQ/sakila) (MySQL) | 23 concepts (16 tables, 7 views); no warnings, `check --strict` clean |
+
+Each takes about 0.4 seconds.
 
 ## Performance
 

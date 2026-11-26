@@ -25,6 +25,12 @@
 - LinkML: mixins for further parents, `unique_keys`, rules, multilingual labels (checked with the LinkML tools in CI)
 - Turtle: language tags, labels on properties, `owl:hasKey`
 
+**Tested on real schemas** (Pagila and Sakila, in CI at pinned versions), which led to:
+- PostgreSQL partitions fold into their parent table with a note, and foreign keys declared on partitions carry up
+- PostgreSQL 18 virtual generated columns are read
+- A table the parser rejects is read column by column; anything skipped is reported as a `?` warning instead of disappearing
+- Function bodies with `$1` placeholders no longer crash the dump reader
+
 **More sources**
 - `openapi:` (OpenAPI 3.x, Swagger 2.0; JSON or YAML): schemas become concepts, operations become concepts with parameters, body and `returns`
 - `dbt:` (manifest or project folder): models, seeds, snapshots and sources; tests and constraints carry over as flags, enums, relations and rules; lineage and semantic-layer measures as notes

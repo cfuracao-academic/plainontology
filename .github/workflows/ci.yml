@@ -119,6 +119,33 @@ jobs:
       - run: pre-commit try-repo . plainonto-check --files examples/library.onto
       - run: pre-commit try-repo . plainonto-drift --files examples/library.onto
 
+  real-schemas:
+    # Public sample databases at pinned versions: Pagila (PostgreSQL licence) and
+    # Sakila (BSD-2-Clause). Only their schema files are downloaded; nothing is executed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[postgres,mysql]"
+      - name: Extract and check Pagila and Sakila
+        run: |
+          mkdir real && cd real
+          curl -fsSL -o pagila.sql https://raw.githubusercontent.com/devrimgunduz/pagila/6ea53f812254c91a602f61c0ef62beca3fa676b1/pagila-schema.sql
+          curl -fsSL -o sakila.sql https://raw.githubusercontent.com/jOOQ/sakila/e089a5b1ec9af0df7a9c6a5d47d49fa1736a4e84/mysql-sakila-db/mysql-sakila-schema.sql
+          plainonto init pagila.onto --from postgres:pagila.sql | tee pagila.out
+          plainonto init sakila.onto --from mysql:sakila.sql | tee sakila.out
+          plainonto check --strict pagila.onto sakila.onto
+          plainonto drift pagila.onto sakila.onto
+          if grep -q "warning" pagila.out sakila.out; then echo "unexpected warnings"; exit 1; fi
+          test "$(grep -c '^concept' pagila.onto)" = 24
+          test "$(grep -c '^concept' sakila.onto)" = 23
+          grep -q '^concept Film ' pagila.onto
+          grep -q '^concept Film ' sakila.onto
+          grep -q 'partitioned by RANGE (payment_date) into 55 tables' pagila.onto
+          grep -q 'customer -> Customer required' pagila.onto
+
   example-drift:
     # The example file must match its sources, as a demo of using drift as a CI gate.
     runs-on: ubuntu-latest

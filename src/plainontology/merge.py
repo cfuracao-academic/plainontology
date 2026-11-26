@@ -71,7 +71,8 @@ class Change:
         if self.kind == "kept_yours":
             return f"{sym} {self.concept}: kept your line {self.line}  (sources say: {self.previous})"
         if self.kind == "warning":
-            return f"{sym} warning: concept {self.concept} is {self.line}"
+            subject = f"concept {self.concept} is " if self.concept else ""
+            return f"{sym} warning: {subject}{self.line}"
         return f"{sym} {self.concept}: {self.line}"
 
 

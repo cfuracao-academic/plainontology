@@ -83,7 +83,19 @@ def test_unrecognised_check_is_kept_as_note():
 
 def test_postgres_dump():
     concepts = _lines(extract("postgres:library.postgres.sql", EXAMPLES))
-    assert list(concepts) == ["Author", "Book", "Award", "BookAward", "Tag", "Loan", "ArchiveLoan", "OpenLoan"]
+    assert list(concepts) == [
+        "Author",
+        "Book",
+        "Award",
+        "BookAward",
+        "Tag",
+        "Loan",
+        "ArchiveLoan",
+        "AuditLog",
+        "OpenLoan",
+    ]
+    assert concepts["AuditLog"][-1] == 'note "partitioned by RANGE (logged_at) into 2 tables"'
+    assert "loan -> Loan" in concepts["AuditLog"]  # foreign key declared on a partition only
     book = concepts["Book"]
     assert 'definition "A title the library holds; one record per edition."' in book  # COMMENT ON TABLE
     assert 'has isbn : text unique "ISBN-13 without hyphens."' in book  # COMMENT ON COLUMN + UNIQUE

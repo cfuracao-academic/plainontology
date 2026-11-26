@@ -13,24 +13,26 @@ as hand-written DDL:
   ``enum(...)`` and ``tinyint(1)`` (MySQL)
 * CREATE TRIGGER, including MySQL's versioned-comment form
 * schemas: tables outside ``public`` keep their schema (``archive.orders``)
+* partitions fold into their parent table, with a note
+* a CREATE TABLE the parser rejects is read column by column; anything
+  skipped is reported as a warning, never dropped silently
 
 Everything else in a dump (SET, data, functions) is skipped. Needs ``sqlglot``.
 """
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import re
 from pathlib import Path
 from typing import Any
 
-from .sqlmodel import Column, ForeignKey, Table, declared_length, enum_type, map_type, qualified
+from .sqlmodel import Column, ForeignKey, Table, declared_length, enum_type, fold_partition, map_type, qualified
 
 try:
     import sqlglot
     from sqlglot import exp
-    from sqlglot.errors import ParseError
+    from sqlglot.errors import SqlglotError  # parse and tokenizer errors
 except ImportError:  # pragma: no cover - reported when used
     sqlglot = None  # type: ignore[assignment]
 
@@ -38,6 +40,22 @@ logging.getLogger("sqlglot").setLevel(logging.ERROR)
 
 DEFAULT_SCHEMAS = {"postgres": ("public",), "mysql": (), "sqlite": ("main",)}
 
+_QNAME = r'((?:[`"]?[\w$]+[`"]?\.)?[`"]?[\w$]+[`"]?)'
+_VIRTUAL = re.compile(r"(GENERATED\s+ALWAYS\s+AS\s*\(.*?\))\s+VIRTUAL\b", re.I | re.S)
+_ATTACH = re.compile(rf"ALTER\s+TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?{_QNAME}\s+ATTACH\s+PARTITION\s+{_QNAME}", re.I)
+_PARTITION_OF = re.compile(rf"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?{_QNAME}\s+PARTITION\s+OF\s+{_QNAME}", re.I)
+_PARTITION_BY = re.compile(
+    rf"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?{_QNAME}\s*\((?:(?!CREATE\s+TABLE).)*?\)\s*"
+    r"PARTITION\s+BY\s+(\w+)\s*\(([^)]*)\)",
+    re.I | re.S,
+)
+_SCHEMA_STATEMENT = re.compile(
+    r"^\s*(CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNLOGGED\s+|TEMP\w*\s+)?(?:TABLE|VIEW|TYPE|DOMAIN|UNIQUE\s+INDEX)|ALTER\s+TABLE|COMMENT\s+ON)\b",
+    re.I,
+)
+_CREATE_TABLE = re.compile(
+    r"^\s*(CREATE\s+(?:UNLOGGED\s+|TEMP\w*\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?\S+)\s*\((.*)\)([^)]*)$", re.I | re.S
+)
 _COPY_BLOCK = re.compile(r"^COPY [^\n]*FROM stdin;\n.*?^\\\.\n?", re.M | re.S)
 _INSERTS = re.compile(r"^INSERT INTO [^\n]*;\n", re.M)
 _VERSIONED = re.compile(r"/\*!\d*\s*(.*?)\*/", re.S)
@@ -142,6 +160,9 @@ class _Reader:
         self.tables: dict[str, Table] = {}
         self.views: list[tuple[str, Any]] = []
         self.table_comments: dict[str, str] = {}
+        self.warnings: list[str] = []
+        self.partition_of: dict[str, str] = {}  # partition -> parent table
+        self.partition_keys: dict[str, str] = {}  # parent -> "RANGE (day)"
         self.column_comments: dict[tuple[str, str], str] = {}
 
     # names -------------------------------------------------------------
@@ -434,22 +455,92 @@ class _Reader:
             if col is not None:
                 col.comment = text
 
+    def qual_text(self, name: str) -> str:
+        parts = [p.strip('`"') for p in name.split(".")]
+        schema = parts[-2] if len(parts) > 1 and self.dialect != "mysql" else None
+        return qualified(schema, parts[-1], self.defaults)
+
+    def partitions(self, sql: str) -> None:
+        for m in _ATTACH.finditer(sql):
+            self.partition_of[self.qual_text(m[2])] = self.qual_text(m[1])
+        for m in _PARTITION_OF.finditer(sql):
+            self.partition_of[self.qual_text(m[1])] = self.qual_text(m[2])
+        for m in _PARTITION_BY.finditer(sql):
+            self.partition_keys[self.qual_text(m[1])] = f"{m[2].upper()} ({' '.join(m[3].split())})"
+
+    def fold_partitions(self) -> None:
+        counts: dict[str, int] = {}
+        for child, parent in self.partition_of.items():
+            if parent in self.tables:
+                if child in self.tables:
+                    fold_partition(self.tables[parent], self.tables.pop(child))
+                counts[parent] = counts.get(parent, 0) + 1
+        for parent, n in counts.items():
+            key = self.partition_keys.get(parent)
+            self.tables[parent].notes.append(
+                f"partitioned{' by ' + key if key else ''} into {n} table{'' if n == 1 else 's'}"
+            )
+
+    def salvage_table(self, chunk: str) -> list:
+        """Parse a CREATE TABLE the parser rejects one column at a time, keeping what it can read."""
+        m = _CREATE_TABLE.match(chunk)
+        if not m:
+            return []
+        head, body, tail = m[1], m[2], m[3]
+        parts, depth, quote, start = [], 0, "", 0
+        for i, ch in enumerate(body):
+            if quote:
+                quote = "" if ch == quote else quote
+            elif ch in "'\"`":
+                quote = ch
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            elif ch == "," and depth == 0:
+                parts.append(body[start:i])
+                start = i + 1
+        parts.append(body[start:])
+        good = []
+        for part in parts:
+            try:
+                sqlglot.parse_one(f"{head} ({part})", read=self.dialect)
+                good.append(part)
+            except SqlglotError:
+                self.warnings.append(
+                    f"{head.split()[-1]}: skipped a column it could not read: {' '.join(part.split())[:70]}"
+                )
+        for candidate in (f"{head} ({', '.join(good)}){tail}", f"{head} ({', '.join(good)})"):
+            try:
+                return [s for s in sqlglot.parse(candidate, read=self.dialect) if s is not None]
+            except SqlglotError:
+                continue
+        return []
+
     def read(self, sql: str) -> None:
         sql = _INSERTS.sub("", _COPY_BLOCK.sub("", sql))
+        sql = _VIRTUAL.sub(r"\1 STORED", sql)  # PostgreSQL 18 virtual generated columns
         if self.dialect == "mysql":
             # mysqldump hides views and triggers in /*!NNNNN ... */ comments.
             sql = _VERSIONED.sub(lambda m: " " + m[1] + " ", sql)
             sql = _DELIMITER.sub("", sql).replace(";;", ";")
         self.prescan(sql)
+        self.partitions(sql)
         try:
             statements = sqlglot.parse(sql, read=self.dialect)
-        except ParseError:
+        except SqlglotError:
             statements = []
             for chunk in re.split(r";\s*\n", sql):
                 if not chunk.strip():
                     continue
-                with contextlib.suppress(ParseError):
+                try:
                     statements += sqlglot.parse(chunk, read=self.dialect)
+                except SqlglotError:
+                    body = "\n".join(line for line in chunk.splitlines() if not line.lstrip().startswith("--"))
+                    if _CREATE_TABLE.match(body):
+                        statements += self.salvage_table(body)
+                    elif _SCHEMA_STATEMENT.match(body):
+                        self.warnings.append(f"skipped a statement it could not read: {' '.join(body.split())[:70]}")
         types_first = sorted(
             (s for s in statements if s is not None),
             key=lambda s: not (isinstance(s, exp.Create) and (s.args.get("kind") or "").upper() == "TYPE"),
@@ -460,15 +551,19 @@ class _Reader:
             self.tables[name] = self.resolve_view(name, query)
         self.apply_comments()
         self.triggers(sql)
+        self.fold_partitions()
 
 
-def tables_from_ddl(sql: str, dialect: str) -> list[Table]:
-    """Parse DDL in ``dialect`` ("postgres", "mysql" or "sqlite") into tables, in file order."""
+def tables_from_ddl(sql: str, dialect: str, warnings: list[str] | None = None) -> list[Table]:
+    """Parse DDL in ``dialect`` ("postgres", "mysql" or "sqlite") into tables, in file order.
+    Statements and columns that could not be read are described in ``warnings``."""
     _require()
     reader = _Reader(dialect)
     reader.read(sql)
+    if warnings is not None:
+        warnings.extend(reader.warnings)
     return [t for t in reader.tables.values() if t.columns or t.kind == "view"]
 
 
-def tables_from_file(path: Path, dialect: str) -> list[Table]:
-    return tables_from_ddl(path.read_text(encoding="utf-8"), dialect)
+def tables_from_file(path: Path, dialect: str, warnings: list[str] | None = None) -> list[Table]:
+    return tables_from_ddl(path.read_text(encoding="utf-8"), dialect, warnings)

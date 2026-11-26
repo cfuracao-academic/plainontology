@@ -26,6 +26,8 @@ Dumps are read in their own dialect; live databases through SQLAlchemy, read-onl
 | join tables | a `many` relation; a join table with extra columns also stays a concept |
 | triggers | notes |
 | `ALTER TABLE` column changes, table renames | applied in order, so migration scripts work as a dump |
+| partitions (`PARTITION OF`, `ATTACH PARTITION`) | fold into the parent table with a note; their foreign keys carry up |
+| a statement or column the parser cannot read | skipped and reported as a `?` warning, never dropped silently; a table is read column by column so one odd column does not hide it |
 
 For a live database, keep the URL in an environment variable. A URL with a password in the source line is refused, because the line is saved in the file.
 

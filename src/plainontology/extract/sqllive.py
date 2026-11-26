@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import re
 
-from .sqlmodel import Column, ForeignKey, Table, declared_length, enum_type, map_type, qualified
+from .sqlmodel import Column, ForeignKey, Table, declared_length, enum_type, fold_partition, map_type, qualified
 
 _DRIVERS = {
     "postgresql://": "postgresql+psycopg://",
@@ -195,6 +195,8 @@ def tables_from_database(url: str) -> list[Table]:
         insp = sa.inspect(engine)
         default = insp.default_schema_name
         domains: dict[str, str] = {}
+        partition_of: dict[str, str] = {}  # partition -> parent (PostgreSQL)
+        partition_keys: dict[str, str] = {}
         if engine.dialect.name == "postgresql":
             schemas: list[str | None] = [s for s in insp.get_schema_names() if not _PG_SYSTEM.match(s)]
             schemas.sort(key=lambda s: (s != default, s))
@@ -206,6 +208,22 @@ def tables_from_database(url: str) -> list[Table]:
                     )
                 )
                 domains = {str(name).lower(): str(declared) for name, declared in rows}
+                partitions = conn.execute(
+                    sa.text(
+                        "SELECT cn.nspname, c.relname, pn.nspname, p.relname, pg_get_partkeydef(p.oid) "
+                        "FROM pg_catalog.pg_inherits i "
+                        "JOIN pg_catalog.pg_class c ON c.oid = i.inhrelid "
+                        "JOIN pg_catalog.pg_namespace cn ON cn.oid = c.relnamespace "
+                        "JOIN pg_catalog.pg_class p ON p.oid = i.inhparent "
+                        "JOIN pg_catalog.pg_namespace pn ON pn.oid = p.relnamespace "
+                        "WHERE c.relispartition"
+                    )
+                )
+                for c_schema, child, p_schema, parent, key in partitions:
+                    defaults = (default.lower(),) if default else ()
+                    partition_of[qualified(c_schema, child, defaults)] = qualified(p_schema, parent, defaults)
+                    if key:
+                        partition_keys[qualified(p_schema, parent, defaults)] = " ".join(str(key).split())
         else:
             schemas = [None]  # MySQL and SQLite: the connected database only
         tables: list[Table] = []
@@ -217,6 +235,18 @@ def tables_from_database(url: str) -> list[Table]:
                     tables.append(_read(insp, conn, engine, name, schema, default, "table", triggers, domains))
                 for name in _safe(lambda s=schema: insp.get_view_names(schema=s), []):
                     tables.append(_read(insp, conn, engine, name, schema, default, "view", triggers, domains))
+        by_name = {t.name: t for t in tables}
+        counts: dict[str, int] = {}
+        for child, parent in partition_of.items():
+            if child in by_name and parent in by_name:
+                counts[parent] = counts.get(parent, 0) + 1
+                fold_partition(by_name[parent], by_name[child])
+        tables = [t for t in tables if not (t.name in partition_of and partition_of[t.name] in by_name)]
+        for parent, n in counts.items():
+            key = partition_keys.get(parent)
+            by_name[parent].notes.append(
+                f"partitioned{' by ' + key if key else ''} into {n} table{'' if n == 1 else 's'}"
+            )
         return tables
     finally:
         engine.dispose()

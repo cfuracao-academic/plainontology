@@ -57,9 +57,18 @@ class Table:
     kind: str = "table"  # or "view"
     checks: list[str] = field(default_factory=list)  # CHECK expressions as SQL text
     triggers: list[str] = field(default_factory=list)  # e.g. "touch: BEFORE INSERT, UPDATE"
+    notes: list[str] = field(default_factory=list)  # e.g. "partitioned by RANGE (day) into 12 tables"
 
     def column(self, name: str) -> Column | None:
         return next((c for c in self.columns if c.name == name), None)
+
+
+def fold_partition(parent: Table, child: Table) -> None:
+    """Carry a partition's foreign keys up to its parent table (PostgreSQL lets
+    them be declared on the partitions only)."""
+    for fk in child.foreign_keys:
+        if not any(f.columns == fk.columns and f.table == fk.table for f in parent.foreign_keys):
+            parent.foreign_keys.append(ForeignKey(list(fk.columns), fk.table))
 
 
 def enum_type(values: list[str]) -> str:
@@ -236,7 +245,7 @@ def tables_to_concepts(tables: list[Table], label: str) -> list[Concept]:
             sets.insert(0, list(t.primary_key))
         for cols in sets:
             concept.add(Statement("unique", name=", ".join(prop_name.get(c, safe_name(c)) for c in cols), tag=AUTO))
-        for note in notes:
+        for note in [*t.notes, *notes]:
             concept.add(Statement("note", value=note, tag=AUTO))
         for trigger in t.triggers:
             concept.add(Statement("note", value=f"trigger {trigger}", tag=AUTO))

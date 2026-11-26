@@ -14,3 +14,7 @@ Generated schemas, each table with 10 columns, a foreign key, a commented column
 The file has about 13.5 lines per table (67,505 lines at 5,000 tables). Time grows linearly with the number of tables.
 
 Reproduce with `python benchmarks/bench.py 100 1000 5000` from the repository.
+
+## Real schemas
+
+CI also extracts two public sample databases at pinned versions: Pagila (PostgreSQL, 71 tables of which 55 are partitions, giving 24 concepts) and Sakila (MySQL, 16 tables and 7 views, giving 23 concepts). Each takes about 0.4 seconds, with no warnings and a clean `check --strict`.

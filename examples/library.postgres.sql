@@ -1,7 +1,8 @@
 --
 -- PostgreSQL database dump (schema only), in the style of pg_dump --schema-only.
 -- The library example from library.sql, plus PostgreSQL features: an enum, a domain, an array,
--- comments, CHECK constraints, a view, a trigger, a second schema and a join table with data.
+-- comments, CHECK constraints, a view, a trigger, a second schema, a join table with data
+-- and a partitioned table.
 --
 
 SET statement_timeout = 0;
@@ -109,6 +110,32 @@ CREATE TABLE archive.loans (
     closed_at timestamp with time zone NOT NULL
 );
 
+CREATE TABLE public.audit_log (
+    id integer NOT NULL,
+    logged_at timestamp with time zone NOT NULL,
+    action text NOT NULL,
+    loan_id integer
+)
+PARTITION BY RANGE (logged_at);
+
+CREATE TABLE public.audit_log_2026 (
+    id integer NOT NULL,
+    logged_at timestamp with time zone NOT NULL,
+    action text NOT NULL,
+    loan_id integer
+);
+
+CREATE TABLE public.audit_log_2027 (
+    id integer NOT NULL,
+    logged_at timestamp with time zone NOT NULL,
+    action text NOT NULL,
+    loan_id integer
+);
+
+ALTER TABLE ONLY public.audit_log ATTACH PARTITION public.audit_log_2026 FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');
+
+ALTER TABLE ONLY public.audit_log ATTACH PARTITION public.audit_log_2027 FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00');
+
 CREATE VIEW public.open_loans AS
  SELECT l.id,
     l.member,
@@ -149,6 +176,9 @@ ALTER TABLE ONLY public.book_awards
 ALTER TABLE ONLY archive.loans
     ADD CONSTRAINT loans_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.audit_log
+    ADD CONSTRAINT audit_log_pkey PRIMARY KEY (id, logged_at);
+
 CREATE UNIQUE INDEX tags_label_idx ON public.tags USING btree (label);
 
 ALTER TABLE ONLY public.books
@@ -171,6 +201,9 @@ ALTER TABLE ONLY public.book_awards
 
 ALTER TABLE ONLY archive.loans
     ADD CONSTRAINT loans_book_id_fkey FOREIGN KEY (book_id) REFERENCES public.books(id);
+
+ALTER TABLE ONLY public.audit_log_2026
+    ADD CONSTRAINT audit_log_2026_loan_id_fkey FOREIGN KEY (loan_id) REFERENCES public.loans(id);
 
 CREATE TRIGGER loans_touch BEFORE INSERT OR UPDATE ON public.loans FOR EACH ROW EXECUTE FUNCTION public.touch_loan();
 

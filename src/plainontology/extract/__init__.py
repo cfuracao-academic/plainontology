@@ -34,16 +34,19 @@ from .tools import extract_tools
 SQL_KINDS = ("postgres", "mysql")
 
 
-def _file(fn: Callable[[Path], list[Concept]]) -> Callable[[str, Path], list[Concept]]:
-    def run(location: str, base_dir: Path) -> list[Concept]:
+Extractor = Callable[[str, Path, list[str]], list[Concept]]
+
+
+def _file(fn: Callable[[Path], list[Concept]]) -> Extractor:
+    def run(location: str, base_dir: Path, warnings: list[str]) -> list[Concept]:
         path = Path(location)
         return fn(path if path.is_absolute() else base_dir / path)
 
     return run
 
 
-def _sql(dialect: str) -> Callable[[str, Path], list[Concept]]:
-    def run(location: str, base_dir: Path) -> list[Concept]:
+def _sql(dialect: str) -> Extractor:
+    def run(location: str, base_dir: Path, warnings: list[str]) -> list[Concept]:
         if is_live(location):
             from .sqllive import resolve_url, tables_from_database
 
@@ -52,13 +55,13 @@ def _sql(dialect: str) -> Callable[[str, Path], list[Concept]]:
             from .sqldump import tables_from_file
 
             path = Path(location)
-            tables = tables_from_file(path if path.is_absolute() else base_dir / path, dialect)
+            tables = tables_from_file(path if path.is_absolute() else base_dir / path, dialect, warnings)
         return tables_to_concepts(tables, dialect)
 
     return run
 
 
-EXTRACTORS: dict[str, Callable[[str, Path], list[Concept]]] = {
+EXTRACTORS: dict[str, Extractor] = {
     "sqlite": _file(extract_sqlite),
     "postgres": _sql("postgres"),
     "mysql": _sql("mysql"),
@@ -80,9 +83,9 @@ def is_file_location(kind: str, location: str) -> bool:
     return not (kind in SQL_KINDS and is_live(location))
 
 
-def extract(spec: str, base_dir: Path) -> list[Concept]:
+def extract(spec: str, base_dir: Path, warnings: list[str] | None = None) -> list[Concept]:
     kind, location = parse_source(spec)
-    return EXTRACTORS[kind](location, base_dir)
+    return EXTRACTORS[kind](location, base_dir, warnings if warnings is not None else [])
 
 
 def _shared(name: str, first: str, second: str) -> bool:
@@ -100,7 +103,10 @@ def extract_all(sources: list[str], base_dir: Path) -> Ontology:
     onto = Ontology()
     origin: dict[str, str] = {}
     for spec in sources:
-        for concept in extract(spec, base_dir):
+        problems: list[str] = []
+        found = extract(spec, base_dir, problems)
+        onto.warnings.extend(("", f"{spec}: {message}") for message in problems)
+        for concept in found:
             first = origin.setdefault(concept.name, spec)
             if first != spec and not _shared(concept.name, first, spec):
                 existing = {s.key(): s for s in onto.concepts[concept.name].statements}
