@@ -25,6 +25,23 @@
 - LinkML: mixins for further parents, `unique_keys`, rules, multilingual labels (checked with the LinkML tools in CI)
 - Turtle: language tags, labels on properties, `owl:hasKey`
 
+**Fixes from a second independent review**
+- `rename` never drops a line of yours: merging into an existing name keeps every line (clashes are kept twice and flagged by `check`), renaming to the same name is refused, and a property can only be renamed within its concept
+- Overriding an extracted line with your own keeps your lines under it; an agent's proposal can no longer replace an existing line
+- Migration scripts: `ALTER COLUMN` (type, NOT NULL), `DROP TABLE`, `DROP CONSTRAINT` / `FOREIGN KEY` / `INDEX` (by name, including PostgreSQL's default names), and a re-created table are applied; comments follow later renames; a constraint that cannot be found is a warning
+- Several CHECKs on one column: the strictest bounds win and every pattern is kept (a property can have several `pattern` lines, all must match); MySQL patterns are case-insensitive like its default collations
+- Name collisions never drop a line: a column and a foreign key, two columns, two JSON Schema properties, two schemas called the same in different files, an operation and a schema: each gets its own name, with a warning
+- JSON Schema `$anchor` references resolve; decimal exclusive bounds and non-integer lengths are handled
+- Rename detection only acts on clear, uncontested matches, and follows a foreign key whose target table was renamed too
+- Names may use combining marks (Hindi, decomposed accents); `café` becomes `Café`
+- Header lines, comments at the start of a line, blank lines and CRLF line endings are kept as typed; a file without a header gets none added; `check` flags a prefix declared twice
+- Proposed lines do not count in `validate` or the exports until a person accepts them
+- `validate`: `$` and formats no longer accept a trailing newline, NaN is not a number, an unknown concept exits 2, and dates behave the same on Python 3.10
+- Exports: big integers stay exact; LinkML keys such as Yes, ON and Null are quoted
+- SQLite: a stale view is skipped with a warning; a runaway `.sql` file is stopped after 10 seconds; multi-level partitions fold into the top table
+- Reports escape line breaks in names; output is UTF-8 when piped (Windows); `drift` and `check` without files skip only hidden folders, node_modules and virtual environments
+- The Action installs the PlainOntology version matching its tag, switches off live databases and confines source files to the checkout unless told otherwise, and uses a random output delimiter
+
 **Fixes from an independent review before release**
 - Nothing PlainOntology writes can be unreadable: numbers never use exponents, every line-separator and control character in a string is escaped, database regexes are translated to Python (`\y`, POSIX classes) or kept as a note, names may start with a letter in any script, and a final check refuses to write a file that would not read back
 - A person's lines are written back exactly as typed, including spacing and backslashes; unknown escapes such as `\d` are kept, and blank lines and the header order are kept
@@ -37,7 +54,7 @@
 - `validate` treats `key` as required and checks dates strictly on every Python version; dbt date ranges and exclusive ranges become notes; LinkML enum and prefix names no longer collide
 - CI builds the wheel, installs it in clean environments and uses it
 
- (Pagila and Sakila, in CI at pinned versions), which led to:
+**Tested on real schemas** (Pagila and Sakila, in CI at pinned versions), which led to:
 - PostgreSQL partitions fold into their parent table with a note, and foreign keys declared on partitions carry up
 - PostgreSQL 18 virtual generated columns are read
 - A table the parser rejects is read column by column; anything skipped is reported as a `?` warning instead of disappearing

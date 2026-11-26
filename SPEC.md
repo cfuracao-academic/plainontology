@@ -78,7 +78,7 @@ concept NAME [TAG]
 | `label "text"[@lang]`, `synonym ...`, `note ...`, `definition ...` | meaning of the property itself; the description on the property line is its default definition |
 | `min N`, `max N` | inclusive bounds for numbers |
 | `length LOW..HIGH` | string length; either bound may be left out (`..13`, `1..`) |
-| `pattern "regex"` | the value must contain a match (anchor with `^...$` for a full match) |
+| `pattern "regex"` | the value must contain a match (anchor with `^...$` for a full match); a property may have several, and all must match. `$` matches only at the very end |
 | `format NAME` | a JSON Schema format: `email`, `uri`, `uuid`, `hostname`, `ipv4`, `ipv6` are checked by `validate` |
 
 Rules apply to each value; for a `many` property, to each item. Rules are not allowed on a concept or under a relation.
@@ -106,7 +106,8 @@ Merge matches lines by key, one line per key per concept (or per property, for l
 | `synonym`, `note` | the text and language |
 | `is_a`, `same_as` | the target |
 | `unique (...)` | the set of properties, in any order |
-| `min`, `max`, `length`, `pattern`, `format` | the rule kind (one each per property) |
+| `min`, `max`, `length`, `format` | the rule kind (one each per property) |
+| `pattern` | the regex (several per property) |
 | comment | the text |
 
 ## Refresh rules
@@ -121,8 +122,9 @@ When `plainonto refresh` re-extracts the sources:
 6. **Ownership of a concept.** A concept header you wrote (no tag) or an agent proposed stays as it is, even when a source starts producing a concept of that name; the extracted lines still arrive inside it.
 7. **Renames.** If an extracted concept holding your lines disappears and exactly one new concept appears with at least 60% of the same properties (and at least two in common), it is a rename: your lines move to the new name, in the old place (`>`). If an extracted property holding your lines disappears and exactly one new property of the same kind and type appears in that concept, your lines move to it (`>`). Anything less certain is reported, not guessed; use `plainonto rename` for those. `--no-renames` on `refresh` and `drift` turns rename detection off. Your lines elsewhere that point to the old name (`about -> Member`) are never rewritten; the report lists them (`?`) and `plainonto rename FILE Member Patron` updates them.
 8. If two sources (or two tables of one source) would make the same concept, the report warns (`?`). Within one SQL source the second table gets a distinct name (`books` becomes `Books` next to `Book`); across sources the lines are combined and the first source wins. Statements a source cannot read, and a source that produces nothing, are warnings too. A warning is not drift.
-9. **Your text is kept.** A line you wrote is written back exactly as you typed it, spacing and escapes included; blank lines inside a concept and the order of the header lines are kept. Indentation is normalised to two spaces per level.
-10. Refresh never writes a file it cannot read back, and is idempotent: running it twice changes nothing the second time.
+9. **Your text is kept.** A line you wrote is written back exactly as you typed it, spacing and escapes included, and so are header lines, comments, blank lines and the file's line endings. A file without a header gets none added. Indentation of statement lines is normalised to two spaces per level.
+10. **Proposals wait.** `[proposed]` lines and concepts do not count in `validate` or the exports until a person accepts them by deleting the tag.
+11. Refresh never writes a file it cannot read back, and is idempotent: running it twice changes nothing the second time.
 
 ## Drift report symbols
 

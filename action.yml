@@ -7,13 +7,16 @@ branding:
 
 inputs:
   file:
-    description: Path to the .onto file (or several, separated by spaces).
-    required: true
+    description: >-
+      Path to the .onto file (or several, separated by spaces). Leave empty to
+      check every .onto file in the repository.
+    default: ""
   install:
     description: >-
-      What to pip install. Add extras for your sources, for example
-      "plainontology[postgres]" or "plainontology[mysql]==0.2.0".
-    default: plainontology
+      What to pip install. Empty installs the PlainOntology version that matches
+      this Action's release tag. Add extras for your sources, for example
+      "plainontology[postgres]==0.2.0".
+    default: ""
   python-version:
     description: Python version to run on.
     default: "3.12"
@@ -27,6 +30,13 @@ inputs:
     default: "false"
   no-renames:
     description: Never treat a vanished concept or property as renamed.
+    default: "false"
+  allow-live-databases:
+    description: >-
+      Allow sources that connect to a live database. Off by default: on a pull
+      request, the .onto file (and so its source lines) comes from the
+      contributor, and could point a connection, with any credentials in the
+      environment, at a host they choose. Turn it on only for trusted branches.
     default: "false"
 
 outputs:
@@ -48,7 +58,18 @@ runs:
       shell: bash
       env:
         INSTALL: ${{ inputs.install }}
-      run: python -m pip install --quiet --disable-pip-version-check "$INSTALL"
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        spec="$INSTALL"
+        if [ -z "$spec" ]; then
+          # The same version as this Action's tag (v0.2.0 installs plainontology==0.2.0).
+          if [[ "$ACTION_REF" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            spec="plainontology==${BASH_REMATCH[1]}"
+          else
+            spec="plainontology"
+          fi
+        fi
+        python -m pip install --quiet --disable-pip-version-check "$spec"
 
     - id: drift
       name: Compare the file with its sources
@@ -56,10 +77,13 @@ runs:
       env:
         FILES: ${{ inputs.file }}
         NO_RENAMES: ${{ inputs.no-renames }}
+        ALLOW_LIVE: ${{ inputs.allow-live-databases }}
       run: |
         set +e
         args=()
         if [ "$NO_RENAMES" = "true" ]; then args+=(--no-renames); fi
+        if [ "$ALLOW_LIVE" != "true" ]; then export PLAINONTO_NO_LIVE=1; fi
+        export PLAINONTO_SOURCE_ROOT="$GITHUB_WORKSPACE"  # source files must be inside the checkout
         # shellcheck disable=SC2086
         report=$(plainonto drift $FILES "${args[@]}" 2>"$RUNNER_TEMP/plainonto-stderr.txt")
         code=$?
@@ -71,16 +95,18 @@ runs:
           exit 2
         fi
         if [ "$code" -eq 1 ]; then echo "drift=true" >> "$GITHUB_OUTPUT"; else echo "drift=false" >> "$GITHUB_OUTPUT"; fi
+        # A delimiter no report line can contain.
+        delimiter="PLAINONTO_$(python -c 'import secrets; print(secrets.token_hex(16))')"
         {
-          echo "report<<PLAINONTO_REPORT_END"
+          echo "report<<$delimiter"
           echo "$report"
-          echo "PLAINONTO_REPORT_END"
+          echo "$delimiter"
         } >> "$GITHUB_OUTPUT"
         {
           echo "### PlainOntology drift"
-          echo '```diff'
-          echo "$report"
-          echo '```'
+          echo '~~~~~~diff'
+          echo "${report//\~\~\~/\~ \~ \~}"
+          echo '~~~~~~'
         } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Comment on the pull request
@@ -99,7 +125,8 @@ runs:
         REPO: ${{ github.repository }}
       run: |
         marker="<!-- plainontology-drift -->"
-        body=$(printf '%s\n### PlainOntology drift\n\nThe ontology file no longer matches its sources. Run `plainonto refresh` and commit the result.\n\n```diff\n%s\n```\n' "$marker" "$REPORT")
+        safe="${REPORT//\~\~\~/\~ \~ \~}"  # the report cannot close the fence below
+        body=$(printf '%s\n### PlainOntology drift\n\nThe ontology file no longer matches its sources. Run `plainonto refresh` and commit the result.\n\n~~~~~~diff\n%s\n~~~~~~\n' "$marker" "$safe")
         existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
         if [ -n "$existing" ]; then
           gh api -X PATCH "repos/$REPO/issues/comments/$existing" -f body="$body" > /dev/null

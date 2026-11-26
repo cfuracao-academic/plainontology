@@ -15,7 +15,9 @@ DEFAULT_HEADER = [
     " Every other line is yours and is never overwritten. Format: see SPEC.md in the PlainOntology repo.",
 ]
 
-NAME = r"[^\W\d][\w.:/-]*"  # starts with a letter (any script) or _
+# Starts with a letter (any script) or _; then letters, digits, combining marks
+# and other non-ASCII printable characters, or _ . : / -.
+NAME = r"[^\W\d](?:[\w.:/-]|(?![\s\x80-\x9f])[^\x00-\x7f])*"
 _NAME = NAME
 _QSTR = r'"((?:[^"\\]|\\.)*)"'
 _LANG = r"(?:@([A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*))?"
@@ -109,13 +111,17 @@ def _indent(raw: str) -> int:
 
 
 def loads(text: str) -> Ontology:
-    onto = Ontology()
+    onto = Ontology(from_file=True)
+    text = text.lstrip("\ufeff")
+    if "\r\n" in text:
+        onto.newline = "\r\n"
     current: Concept | None = None
     last_prop: Statement | None = None
     prop_indent = 0
-    pending_comments: list[str] = []
+    pending: list[str] = []  # column-0 comments (and blank lines between them) not yet placed
+    pending_gap = 0  # blank lines before the first pending comment
     blanks = 0
-    for no, raw in enumerate(text.lstrip("﻿").split("\n"), start=1):
+    for no, raw in enumerate(text.split("\n"), start=1):
         raw = raw.rstrip("\r")
         if not raw.strip():
             blanks += 1
@@ -131,12 +137,25 @@ def loads(text: str) -> Ontology:
             except ValueError as exc:
                 raise ParseError(no, str(exc), raw) from None
             statement.blank_before = gap
-            if last_prop is not None and indent > prop_indent:
+            under_prop = last_prop is not None and indent > prop_indent
+            target = last_prop.children if under_prop and last_prop is not None else current.statements
+            if pending:  # column-0 comments inside a concept stay where they are
+                waiting = pending_gap
+                for entry in pending:
+                    if not entry:
+                        waiting += 1
+                        continue
+                    comment = parse_statement(entry)
+                    comment.col0, comment.blank_before, waiting = True, waiting, 0
+                    target.append(comment)
+                statement.blank_before = gap
+                pending, pending_gap = [], 0
+            if under_prop:
                 if statement.kind not in CHILD_KINDS:
                     raise ParseError(
                         no, f"'{statement.kind}' cannot sit under a property; indent it like the property line", raw
                     )
-                last_prop.children.append(statement)
+                target.append(statement)
                 continue
             if statement.kind in RULE_KINDS:
                 raise ParseError(no, f"'{statement.kind}' belongs under a property line; indent it below one", raw)
@@ -146,33 +165,47 @@ def loads(text: str) -> Ontology:
             elif statement.kind != "comment":
                 last_prop = None
             continue
-        last_prop = None
-        if current is None and gap and onto.preamble:
-            onto.preamble.append(("blank", ""))
+        if current is None and onto.preamble:
+            onto.preamble.extend([("blank", "", "")] * gap)
         if line.startswith("#"):
             if current is None:
                 onto.comments.append(line[1:])
-                onto.preamble.append(("comment", line[1:]))
+                onto.preamble.append(("comment", line[1:], line))
             else:
-                pending_comments.append(line[1:])
+                if pending:
+                    pending.extend([""] * gap)
+                else:
+                    pending_gap = gap
+                pending.append(line)
             continue
+        last_prop = None
         body, tag = _split_tag(line)
         if m := _CONCEPT_RE.match(body):
             name = m[1]
             if name in onto.concepts:
                 raise ParseError(no, f"concept {name} is defined twice", raw)
-            if current is None and not gap:
+            blank_before = pending_gap if pending else gap
+            if current is None:
                 # Comments directly above the first concept belong to it, unless
                 # they are the whole header.
                 tail = 0
                 while tail < len(onto.preamble) and onto.preamble[-1 - tail][0] == "comment":
                     tail += 1
-                if 0 < tail < len(onto.preamble):
-                    pending_comments = [text for _, text in onto.preamble[-tail:]]
+                if not gap and 0 < tail < len(onto.preamble):
+                    pending = [raw_line for _, _, raw_line in onto.preamble[-tail:]]
                     del onto.preamble[-tail:]
                     del onto.comments[-tail:]
-            current = Concept(name, tag, leading_comments=pending_comments, raw_header=line)
-            pending_comments = []
+                    blank_before = 0
+                    while onto.preamble and onto.preamble[-1][0] == "blank":
+                        onto.preamble.pop()
+                        blank_before += 1
+                elif gap:
+                    while onto.preamble and onto.preamble[-1][0] == "blank":
+                        onto.preamble.pop()
+            elif pending:
+                pending.extend([""] * gap)
+            current = Concept(name, tag, leading_comments=pending, raw_header=line, blank_before=blank_before)
+            pending, pending_gap = [], 0
             onto.concepts[name] = current
             continue
         if tag is not None:
@@ -180,29 +213,32 @@ def loads(text: str) -> Ontology:
         if current is not None:
             raise ParseError(no, "prefix and source lines must come before the first concept", raw)
         if m := _PREFIX_RE.match(body):
+            if (m[1] or "") in onto.prefixes:
+                onto.duplicate_prefixes.append(m[1] or "")
             onto.prefixes[m[1] or ""] = m[2]
-            onto.preamble.append(("prefix", m[1] or ""))
+            onto.preamble.append(("prefix", m[1] or "", line))
             continue
         if m := _SOURCE_RE.match(body):
             onto.sources.append(m[1])
-            onto.preamble.append(("source", m[1]))
+            onto.preamble.append(("source", m[1], line))
             continue
         raise ParseError(no, "expected concept, prefix, source or a # comment", raw)
-    onto.trailing_comments = pending_comments
+    onto.trailing_comments = pending
+    onto.trailing_blank_before = pending_gap
     while onto.preamble and onto.preamble[-1][0] == "blank":
         onto.preamble.pop()
     return onto
 
 
 def dump_statement(statement: Statement, indent: str = "  ") -> list[str]:
-    lines = [""] * statement.blank_before + [f"{indent}{statement.text()}"]
+    lines = [""] * statement.blank_before + [f"{'' if statement.col0 else indent}{statement.text()}"]
     for c in statement.children:
-        lines += [""] * c.blank_before + [f"{indent}  {c.text()}"]
+        lines += [""] * c.blank_before + [f"{'' if c.col0 else indent + '  '}{c.text()}"]
     return lines
 
 
 def dump_concept(concept: Concept) -> list[str]:
-    lines = [f"#{c}" for c in concept.leading_comments]
+    lines = list(concept.leading_comments)
     header = concept.header()
     if concept.raw_header and _split_tag(concept.raw_header)[1] == concept.tag:
         header = concept.raw_header
@@ -213,44 +249,50 @@ def dump_concept(concept: Concept) -> list[str]:
 
 
 def _preamble(onto: Ontology) -> list[str]:
-    out: list[str] = []
     prefixes, sources = dict(onto.prefixes), list(onto.sources)
     if not onto.preamble:
-        out = [f"#{c}" for c in (onto.comments or DEFAULT_HEADER)]
+        header = [] if onto.from_file else [f"#{c}" for c in (onto.comments or DEFAULT_HEADER)]
         head = [f"prefix {p}: <{iri}>" for p, iri in prefixes.items()] + [f"source {s}" for s in sources]
-        return out + (["", *head] if head else [])
-    last_head = max((i for i, (kind, _) in enumerate(onto.preamble) if kind in ("prefix", "source")), default=-1)
-    for i, (kind, value) in enumerate(onto.preamble):
+        return header + (["", *head] if head and header else head)
+    out: list[str] = []
+    written: set[str] = set()
+    last_head = max((i for i, (kind, _, _) in enumerate(onto.preamble) if kind in ("prefix", "source")), default=-1)
+    for i, (kind, value, raw) in enumerate(onto.preamble):
         if kind == "comment":
-            out.append(f"#{value}")
+            out.append(raw)
         elif kind == "blank":
             out.append("")
         elif kind == "prefix" and value in prefixes:
-            out.append(f"prefix {value}: <{prefixes.pop(value)}>")
+            out.append(raw)  # as typed, duplicates included
+            written.add(value)
         elif kind == "source" and value in sources:
             sources.remove(value)
-            out.append(f"source {value}")
+            out.append(raw)
         if i == last_head:  # new prefixes and sources go after the existing ones
-            out += [f"prefix {p}: <{iri}>" for p, iri in prefixes.items()] + [f"source {s}" for s in sources]
+            out += [f"prefix {p}: <{iri}>" for p, iri in prefixes.items() if p not in written]
+            out += [f"source {s}" for s in sources]
             prefixes, sources = {}, []
-    if prefixes or sources:
-        out += [""] + [f"prefix {p}: <{iri}>" for p, iri in prefixes.items()] + [f"source {s}" for s in sources]
+    new_lines = [f"prefix {p}: <{iri}>" for p, iri in prefixes.items() if p not in written] + [
+        f"source {s}" for s in sources
+    ]
+    if new_lines:
+        out += ["", *new_lines]
     return out
 
 
 def dumps(onto: Ontology) -> str:
     out = _preamble(onto)
     for concept in onto.concepts.values():
-        out.append("")
+        out.extend([""] * (concept.blank_before if out else 0))
         out.extend(dump_concept(concept))
     if onto.trailing_comments:
-        out.append("")
-        out.extend(f"#{c}" for c in onto.trailing_comments)
+        out.extend([""] * onto.trailing_blank_before)
+        out.extend(onto.trailing_comments)
     return "\n".join(out) + "\n"
 
 
 def load(path: str | Path) -> Ontology:
-    return loads(Path(path).read_text(encoding="utf-8-sig"))
+    return loads(Path(path).read_bytes().decode("utf-8-sig"))  # bytes: keep CRLF line endings visible
 
 
 def save(path: str | Path, onto: Ontology) -> None:
@@ -264,4 +306,4 @@ def save(path: str | Path, onto: Ontology) -> None:
             f"refusing to write {path}: the result would not read back ({exc}). "
             "This is a bug in PlainOntology; please report it with the source that caused it."
         ) from None
-    Path(path).write_text(text, encoding="utf-8", newline="\n")
+    Path(path).write_text(text, encoding="utf-8", newline=onto.newline)

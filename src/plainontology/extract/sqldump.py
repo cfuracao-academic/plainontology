@@ -160,6 +160,7 @@ class _Reader:
         self.tables: dict[str, Table] = {}
         self.views: list[tuple[str, Any]] = []
         self.table_comments: dict[str, str] = {}
+        self.constraint_names: dict[tuple[str, str], tuple[str, object]] = {}
         self.warnings: list[str] = []
         self.partition_of: dict[str, str] = {}  # partition -> parent table
         self.partition_keys: dict[str, str] = {}  # parent -> "RANGE (day)"
@@ -219,25 +220,62 @@ class _Reader:
         return map_type(kind.sql(self.dialect)), False, length
 
     # statements --------------------------------------------------------
-    def constraint(self, t: Table, node) -> None:
+    def remember(self, t: Table, name: str | None, kind: str, value) -> None:
+        """Record a constraint under its name (and PostgreSQL's default name) for DROP CONSTRAINT."""
+        if name:
+            self.constraint_names[(t.name, name.lower())] = (kind, value)
+
+    def constraint(self, t: Table, node, name: str | None = None) -> None:
+        bare = t.name.split(".")[-1]
         if isinstance(node, exp.Constraint):
             for inner in node.expressions:
-                self.constraint(t, inner)
+                self.constraint(t, inner, node.this.name if node.this is not None else None)
         elif isinstance(node, exp.PrimaryKey):
             t.primary_key = _columns(node)
+            self.remember(t, name or f"{bare}_pkey", "pk", None)
         elif isinstance(node, exp.ForeignKey):
             ref = node.args.get("reference")
             target = ref.this if ref is not None else None
             if target is not None:
-                t.foreign_keys.append(ForeignKey(_columns(node), self.qual(target)))
+                fk = ForeignKey(_columns(node), self.qual(target))
+                t.foreign_keys.append(fk)
+                self.remember(t, name or f"{bare}_{'_'.join(fk.columns)}_fkey", "fk", fk)
         elif isinstance(node, exp.UniqueColumnConstraint):
-            cols = _columns(node.this)
+            schema = node.this
+            cols = _columns(schema)
+            key_name = name or (
+                schema.this.name if isinstance(schema, exp.Schema) and schema.this is not None else None
+            )
             if len(cols) == 1:
                 t.unique.add(cols[0])
+                self.remember(t, key_name or f"{bare}_{cols[0]}_key", "unique", cols[0])
             elif cols:
                 t.unique_sets.append(cols)
+                self.remember(t, key_name or f"{bare}_{'_'.join(cols)}_key", "unique_set", cols)
         elif isinstance(node, exp.CheckColumnConstraint) and node.this is not None:
-            t.checks.append(node.this.sql(self.dialect))
+            sql = node.this.sql(self.dialect)
+            t.checks.append(sql)
+            self.remember(t, name, "check", sql)
+
+    def drop_constraint(self, t: Table, name: str) -> None:
+        found = self.constraint_names.pop((t.name, name.lower()), None)
+        if found is None:
+            if name.lower() in {c.lower() for c in t.unique}:  # MySQL DROP INDEX on a unique column
+                t.unique = {c for c in t.unique if c.lower() != name.lower()}
+                return
+            self.warnings.append(f"{t.name}: could not find constraint {name} to drop; the result may still list it")
+            return
+        kind, value = found
+        if kind == "pk":
+            t.primary_key = []
+        elif kind == "fk":
+            t.foreign_keys = [fk for fk in t.foreign_keys if fk is not value]
+        elif kind == "unique":
+            t.unique.discard(value)
+        elif kind == "unique_set":
+            t.unique_sets = [u for u in t.unique_sets if u != value]
+        elif kind == "check" and value in t.checks:
+            t.checks.remove(value)
 
     def column(self, t: Table, item) -> Column:
         kind_node = item.args.get("kind")
@@ -253,10 +291,14 @@ class _Reader:
                 col.not_null = True
             elif isinstance(kind, exp.PrimaryKeyColumnConstraint):
                 t.primary_key = [item.name]
+                self.remember(t, f"{t.name.split('.')[-1]}_pkey", "pk", None)
             elif isinstance(kind, exp.UniqueColumnConstraint):
                 t.unique.add(item.name)
+                self.remember(t, f"{t.name.split('.')[-1]}_{item.name}_key", "unique", item.name)
             elif isinstance(kind, exp.Reference) and kind.this is not None:
-                t.foreign_keys.append(ForeignKey([item.name], self.qual(kind.this)))
+                fk = ForeignKey([item.name], self.qual(kind.this))
+                t.foreign_keys.append(fk)
+                self.remember(t, f"{t.name.split('.')[-1]}_{item.name}_fkey", "fk", fk)
             elif isinstance(kind, exp.CommentColumnConstraint) and kind.this is not None:
                 col.comment = kind.this.name
             elif isinstance(kind, exp.CheckColumnConstraint) and kind.this is not None:
@@ -299,6 +341,9 @@ class _Reader:
         t = self.tables.pop(old)
         t.name = new
         self.tables[new] = t
+        for (table, cname), _value in list(self.constraint_names.items()):
+            if table == old:
+                self.constraint_names[(new, cname)] = self.constraint_names.pop((table, cname))
         for other in self.tables.values():
             for fk in other.foreign_keys:
                 if fk.table == old:
@@ -319,6 +364,30 @@ class _Reader:
             elif isinstance(action, exp.Drop) and (action.args.get("kind") or "").upper() == "COLUMN":
                 for target in action.args.get("tables") or []:
                     self.drop_column(t, target.name)
+            elif isinstance(action, exp.Drop) and (action.args.get("kind") or "").upper() in (
+                "CONSTRAINT",
+                "FOREIGN KEY",
+                "INDEX",
+                "KEY",
+                "PRIMARY KEY",
+            ):
+                if (action.args.get("kind") or "").upper() == "PRIMARY KEY":
+                    t.primary_key = []
+                for target in action.args.get("tables") or []:
+                    self.drop_constraint(t, target.name)
+            elif _is(action, "AlterColumn"):
+                col = t.column(action.this.name) if action.this is not None else None
+                if col is None:
+                    self.warnings.append(
+                        f"{t.name}: ALTER COLUMN {action.this.name if action.this else '?'}: no such column"
+                    )
+                    continue
+                if action.args.get("dtype") is not None:
+                    col.datatype, col.many, col.max_length = self.datatype(action.args["dtype"])
+                if action.args.get("allow_null") is False:
+                    col.not_null = True
+                elif action.args.get("drop") and action.args.get("allow_null"):
+                    col.not_null = False
             elif _is(action, "RenameColumn"):
                 self.rename_column(t, action.this.name, action.args["to"].name)
             elif _is(action, "AlterRename") and action.this is not None:
@@ -335,7 +404,12 @@ class _Reader:
 
     def create_table(self, node) -> None:
         schema = node.this
-        t = self.table(self.qual(schema))
+        name = self.qual(schema)
+        if name in self.tables and self.tables[name].columns:
+            if node.args.get("exists"):  # CREATE TABLE IF NOT EXISTS keeps the existing table
+                return
+            self.tables[name] = Table(name)
+        t = self.table(name)
         for item in schema.expressions:
             if not isinstance(item, exp.ColumnDef):
                 self.constraint(t, item)
@@ -380,11 +454,25 @@ class _Reader:
             text = node.args["expression"].name
             target = node.this
             if kind in ("TABLE", "VIEW", "MATERIALIZED VIEW"):
-                self.table_comments[self.qual(target)] = text
+                name = self.qual(target)
+                if name in self.tables and self.tables[name].columns:
+                    self.tables[name].comment = text
+                else:
+                    self.table_comments[name] = text  # a view, resolved later
             elif kind == "COLUMN" and isinstance(target, exp.Column):
                 schema = target.args.get("db")
                 table = qualified(schema.name if schema is not None else None, target.table, self.defaults)
-                self.column_comments[(table, target.name)] = text
+                col = self.tables[table].column(target.name) if table in self.tables else None
+                if col is not None:
+                    col.comment = text
+                else:
+                    self.column_comments[(table, target.name)] = text
+        elif isinstance(node, exp.Drop) and (node.args.get("kind") or "").upper() in ("TABLE", "VIEW"):
+            for target in node.args.get("tables") or []:
+                name = self.qual(target)
+                self.tables.pop(name, None)
+                self.views = [(n, q) for n, q in self.views if n != name]
+                self.table_comments.pop(name, None)
 
     # views -------------------------------------------------------------
     def resolve_view(self, name: str, query) -> Table:
@@ -470,11 +558,15 @@ class _Reader:
 
     def fold_partitions(self) -> None:
         counts: dict[str, int] = {}
-        for child, parent in self.partition_of.items():
-            if parent in self.tables:
+        for child in list(self.partition_of):
+            root, seen = self.partition_of[child], {child}
+            while root in self.partition_of and root not in seen:
+                seen.add(root)
+                root = self.partition_of[root]
+            if root in self.tables:
                 if child in self.tables:
-                    fold_partition(self.tables[parent], self.tables.pop(child))
-                counts[parent] = counts.get(parent, 0) + 1
+                    fold_partition(self.tables[root], self.tables.pop(child))
+                counts[root] = counts.get(root, 0) + 1
         for parent, n in counts.items():
             key = self.partition_keys.get(parent)
             self.tables[parent].notes.append(

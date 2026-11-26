@@ -22,16 +22,17 @@ jobs:
 
 | Input | Default | Meaning |
 |---|---|---|
-| `file` | | the `.onto` file, or several separated by spaces |
-| `install` | `plainontology` | what to `pip install`, with extras or a version |
+| `file` | every `.onto` file | the `.onto` file, or several separated by spaces |
+| `install` | the version of the Action's tag | what to `pip install`, with extras or a version, for example `plainontology[postgres]==0.2.0` |
 | `fail-on-drift` | `true` | fail the step when the sources changed |
 | `comment` | `false` | post the report as a pull request comment |
 | `no-renames` | `false` | never treat a vanished concept or property as renamed |
+| `allow-live-databases` | `false` | allow `postgres:`/`mysql:` sources that connect to a live database (see below) |
 | `python-version` | `3.12` | |
 
 Outputs: `drift` (`"true"` or `"false"`) and `report`. The report also appears in the job summary. With `comment: "true"` one comment is kept up to date on the pull request; pull requests from forks are skipped (their token is read-only) and a failed comment never fails the check.
 
-For a live database source, pass the URL as a secret: `env: LIBRARY_DB: ${{ secrets.LIBRARY_DB }}` on the step.
+**Untrusted pull requests.** On a pull request the `.onto` file, and so its source lines, come from the contributor. The Action therefore refuses live database sources unless `allow-live-databases: "true"`, and only reads source files inside the checkout. Prefer schema dumps for pull request checks; use a live database only on trusted branches, passing the URL as a secret: `env: LIBRARY_DB: ${{ secrets.LIBRARY_DB }}` on the step.
 
 ## pre-commit
 

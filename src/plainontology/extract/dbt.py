@@ -43,6 +43,7 @@ class _Column:
         self.low: Any = None
         self.high: Any = None
         self.inclusive = True
+        self.notes: list[str] = []
 
 
 def _num(value: Any) -> str | None:
@@ -63,7 +64,7 @@ def _ref_target(text: str, names: dict[str, str]) -> str | None:
     return None
 
 
-def extract_dbt(path: Path) -> list[Concept]:
+def extract_dbt(path: Path, warnings: list[str] | None = None) -> list[Concept]:
     if path.is_dir():
         path = path / "target" / "manifest.json" if (path / "target").is_dir() else path / "manifest.json"
     manifest = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -119,7 +120,10 @@ def extract_dbt(path: Path) -> list[Concept]:
         kwargs = meta.get("kwargs") or {}
         test = meta.get("name", "")
         namespace = meta.get("namespace") or ""
-        if test == "not_null":
+        condition = (node.get("config") or {}).get("where")
+        if condition and test in ("not_null", "unique"):  # a conditional test is not a rule for every row
+            c.notes.append(f"{test.replace('_', ' ')} where {condition}")
+        elif test == "not_null":
             c.required = True
         elif test == "unique":
             c.unique = True
@@ -187,6 +191,7 @@ def extract_dbt(path: Path) -> list[Concept]:
                         if not c.inclusive:
                             word = "more than" if kind == "min" else "less than"
                         line.children.append(Statement("note", value=f"{word} {bound}", tag=AUTO))
+            line.children += [Statement("note", value=text, tag=AUTO) for text in c.notes]
             concept.add(line)
         parents = [by_id[d] for d in (node.get("depends_on") or {}).get("nodes", []) if d in by_id]
         if parents:

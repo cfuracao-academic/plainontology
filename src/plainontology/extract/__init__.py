@@ -19,6 +19,7 @@ File locations are relative to the ontology file.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -37,10 +38,21 @@ SQL_KINDS = ("postgres", "mysql")
 Extractor = Callable[[str, Path, list[str]], list[Concept]]
 
 
+def within_root(path: Path) -> Path:
+    """With PLAINONTO_SOURCE_ROOT set (the GitHub Action sets it to the checkout),
+    a source file must be inside that folder."""
+    root = os.environ.get("PLAINONTO_SOURCE_ROOT")
+    if root:
+        resolved, top = path.resolve(), Path(root).resolve()
+        if resolved != top and top not in resolved.parents:
+            raise ValueError(f"source file {path} is outside {top} (PLAINONTO_SOURCE_ROOT)")
+    return path
+
+
 def _file(fn: Callable[..., list[Concept]], with_warnings: bool = False) -> Extractor:
     def run(location: str, base_dir: Path, warnings: list[str]) -> list[Concept]:
         path = Path(location)
-        path = path if path.is_absolute() else base_dir / path
+        path = within_root(path if path.is_absolute() else base_dir / path)
         return fn(path, warnings) if with_warnings else fn(path)
 
     return run
@@ -56,7 +68,7 @@ def _sql(dialect: str) -> Extractor:
             from .sqldump import tables_from_file
 
             path = Path(location)
-            tables = tables_from_file(path if path.is_absolute() else base_dir / path, dialect, warnings)
+            tables = tables_from_file(within_root(path if path.is_absolute() else base_dir / path), dialect, warnings)
         return tables_to_concepts(tables, dialect, warnings)
 
     return run
@@ -66,10 +78,10 @@ EXTRACTORS: dict[str, Extractor] = {
     "sqlite": _file(extract_sqlite, with_warnings=True),
     "postgres": _sql("postgres"),
     "mysql": _sql("mysql"),
-    "jsonschema": _file(extract_jsonschema),
-    "openapi": _file(extract_openapi),
-    "dbt": _file(extract_dbt),
-    "tools": _file(extract_tools),
+    "jsonschema": _file(extract_jsonschema, with_warnings=True),
+    "openapi": _file(extract_openapi, with_warnings=True),
+    "dbt": _file(extract_dbt, with_warnings=True),
+    "tools": _file(extract_tools, with_warnings=True),
 }
 
 

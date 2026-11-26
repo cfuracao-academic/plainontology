@@ -38,7 +38,7 @@ def iter_tools(doc) -> Iterator[tuple[str, str, dict]]:
         yield tool["name"], tool.get("description", ""), schema
 
 
-def extract_tools(path: Path) -> list[Concept]:
+def extract_tools(path: Path, warnings: list[str] | None = None) -> list[Concept]:
     doc = json.loads(path.read_text(encoding="utf-8-sig"))
     concepts: dict[str, Concept] = {
         "Tool": Concept(

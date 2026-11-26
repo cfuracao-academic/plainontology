@@ -76,6 +76,7 @@ def _prop(n: Namer, c: Concept, s: Statement) -> str:
 
 
 def to_turtle(onto: Ontology, base: str | None = None) -> str:
+    onto = onto.accepted()
     base = base_of(onto, base)
     n = Namer(onto, base, _STANDARD)
     blocks: list[str] = []

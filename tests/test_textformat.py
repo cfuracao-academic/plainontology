@@ -50,8 +50,8 @@ def test_comments_are_kept_in_place():
     text = "# head\n\nconcept A\n  # inside\n  has x : text\n\n# before B\nconcept B\n\n# tail\n"
     onto = loads(text)
     assert onto.comments == [" head"]
-    assert onto.concepts["B"].leading_comments == [" before B"]
-    assert onto.trailing_comments == [" tail"]
+    assert onto.concepts["B"].leading_comments == ["# before B"]
+    assert onto.trailing_comments == ["# tail"]
     assert loads(dumps(onto)).concepts["A"].statements[0].kind == "comment"
 
 

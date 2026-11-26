@@ -19,6 +19,7 @@ Pydantic models can be extracted by dumping ``Model.model_json_schema()`` first.
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,8 @@ class _Shared:
     def __init__(self):
         self.concepts: dict[str, Concept] = {}
         self.walkers: dict[Path, SchemaWalker] = {}
+        self.ref_names: dict[tuple[str, str], str] = {}  # (file, pointer) -> concept name
+        self.warnings: list[str] = []
 
 
 class SchemaWalker:
@@ -82,7 +85,13 @@ class SchemaWalker:
             return self
         if re.match(r"^[a-z][a-z0-9+.-]*://", file_part, re.I) or self.path is None:
             return None
-        target = (self.path.parent / file_part).resolve()
+        from . import within_root
+
+        try:
+            target = within_root(self.path.parent / file_part).resolve()
+        except ValueError as exc:
+            self.shared.warnings.append(str(exc))
+            return None
         if target not in self.shared.walkers:
             if not target.exists():
                 return None
@@ -95,7 +104,30 @@ class SchemaWalker:
         return self._walker_for(file_part), pointer
 
     def ref_name(self, ref: str) -> str:
+        """One concept name per referenced schema. Two different schemas with the
+        same name (Address in billing.json and in shipping.json) get distinct names."""
         walker, pointer = self.locate(ref)
+        owner = walker if walker is not None else self
+        key = (str(owner.path or owner.label), pointer if pointer.strip("/") or walker is not self else ref)
+        if key in self.shared.ref_names:
+            return self.shared.ref_names[key]
+        name = self._base_ref_name(ref, walker, pointer)
+        if name in self.shared.ref_names.values():
+            stem = re.sub(r"(\.schema)?\.json$", "", owner.label, flags=re.I)
+            alternative, n = pascal(f"{stem} {name}"), 2
+            while alternative in self.shared.ref_names.values() or alternative in self.concepts:
+                alternative, n = f"{pascal(f'{stem} {name}')}{n}", n + 1
+            self.shared.warnings.append(
+                f"two schemas are both called {name}; the one in {owner.label} is {alternative}"
+            )
+            name = alternative
+        self.shared.ref_names[key] = name
+        return name
+
+    def _base_ref_name(self, ref: str, walker: SchemaWalker | None, pointer: str) -> str:
+        if pointer and not pointer.startswith("/"):  # an $anchor
+            node = walker.resolve_pointer(pointer) if walker is not None else None
+            return pascal((node or {}).get("title") or pointer)
         if pointer.strip("/"):
             return pascal(pointer.rstrip("/").rsplit("/", 1)[-1])
         if walker is not None and walker is not self:
@@ -104,7 +136,24 @@ class SchemaWalker:
         stem = re.sub(r"(\.schema)?\.json$", "", file_part.rstrip("/").rsplit("/", 1)[-1], flags=re.I)
         return pascal(stem or "Thing")
 
+    def _find_anchor(self, node: Any, anchor: str) -> dict | None:
+        if isinstance(node, dict):
+            if node.get("$anchor") == anchor or node.get("$id") in (f"#{anchor}", anchor):
+                return node
+            children = list(node.values())
+        elif isinstance(node, list):
+            children = node
+        else:
+            return None
+        for child in children:
+            found = self._find_anchor(child, anchor)
+            if found is not None:
+                return found
+        return None
+
     def resolve_pointer(self, pointer: str) -> dict | None:
+        if pointer and not pointer.startswith("/"):
+            return self._find_anchor(self.root, pointer)
         node: Any = self.root
         for part in [p for p in pointer.split("/") if p]:
             part = part.replace("~1", "/").replace("~0", "~")
@@ -172,7 +221,16 @@ class SchemaWalker:
         required = set(schema.get("required", []) or [])
         for pname, ps in (schema.get("properties") or {}).items():
             ps = ps if isinstance(ps, dict) else {}
-            concept.add(self._property(concept.name, pname, ps, pname in required))
+            line = self._property(concept.name, pname, ps, pname in required)
+            if concept.prop(line.name) is not None:  # "first name" and "first_name"
+                wanted, n = line.name, 2
+                while concept.prop(f"{wanted}_{n}") is not None:
+                    n += 1
+                line.name = f"{wanted}_{n}"
+                self.shared.warnings.append(
+                    f"{concept.name}: property '{pname}' would be {wanted}, which is taken; it is {line.name}"
+                )
+            concept.add(line)
 
     def _property(self, owner: str, pname: str, ps: dict, required: bool) -> Statement:
         desc = _clean(ps.get("description"))
@@ -220,28 +278,41 @@ class SchemaWalker:
     def _rules(self, ps: dict, target: str) -> list[Statement]:
         out: list[Statement] = []
         integer = target == "integer"
-        low, high = ps.get("minimum"), ps.get("maximum")
-        x_low, x_high = ps.get("exclusiveMinimum"), ps.get("exclusiveMaximum")
-        notes = []
+        notes: list[str] = []
+
+        def finite(key: str):
+            value = ps.get(key)
+            if isinstance(value, bool) or value is None:
+                return value
+            if not isinstance(value, (int, float)) or not math.isfinite(value):
+                notes.append(f"{key} {value} is not a usable number")
+                return None
+            return value
+
+        low, high = finite("minimum"), finite("maximum")
+        x_low, x_high = finite("exclusiveMinimum"), finite("exclusiveMaximum")
         if isinstance(x_low, bool):  # draft 4
             x_low, low = (low if x_low else None), (None if x_low else low)
         if isinstance(x_high, bool):
             x_high, high = (high if x_high else None), (None if x_high else high)
         if x_low is not None:
-            if integer:
-                low = x_low + 1 if low is None else max(low, x_low + 1)
+            if integer:  # x > 0.5 on integers is x >= 1
+                low = math.floor(x_low) + 1 if low is None else max(low, math.floor(x_low) + 1)
             else:
                 notes.append(f"greater than {_num(x_low)}")
         if x_high is not None:
             if integer:
-                high = x_high - 1 if high is None else min(high, x_high - 1)
+                high = math.ceil(x_high) - 1 if high is None else min(high, math.ceil(x_high) - 1)
             else:
                 notes.append(f"less than {_num(x_high)}")
         if low is not None:
             out.append(Statement("min", value=_num(low), tag=AUTO))
         if high is not None:
             out.append(Statement("max", value=_num(high), tag=AUTO))
-        lo_len, hi_len = ps.get("minLength"), ps.get("maxLength")
+        lo_len, hi_len = (
+            int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+            for v in (ps.get("minLength"), ps.get("maxLength"))
+        )
         if lo_len is not None or hi_len is not None:
             out.append(
                 Statement(
@@ -309,7 +380,16 @@ class SchemaWalker:
             if ps.get("properties") or ps.get("allOf"):
                 base = ps.get("title") or f"{owner} {singular(pname) if many else pname}"
                 name = pascal(base)
-                self.object_concept(name, ps, f"{self.kind} {self.label} {owner}.{pname}")
+                detail = f"{self.kind} {self.label} {owner}.{pname}"
+                existing_tag = self.concepts[name].tag if name in self.concepts else None
+                if existing_tag is not None and existing_tag.detail != detail:
+                    taken, n = name, 2
+                    while name in self.concepts:
+                        name, n = f"{taken}{n}", n + 1
+                    self.shared.warnings.append(
+                        f"{owner}.{pname}: an object would be concept {taken}, which is taken; it is {name}"
+                    )
+                self.object_concept(name, ps, detail)
                 return "rel", name, ""
             return "has", "json", ""
         if "enum" in ps:
@@ -337,10 +417,12 @@ def root_name(schema: dict, path: Path | None) -> str:
     return pascal(schema.get("title") or stem)
 
 
-def extract_jsonschema(path: Path) -> list[Concept]:
+def extract_jsonschema(path: Path, warnings: list[str] | None = None) -> list[Concept]:
     path = path.resolve()
     schema = json.loads(path.read_text(encoding="utf-8-sig"))
     walker = SchemaWalker(schema, path.name, path)
+    if warnings is not None:
+        walker.shared.warnings = warnings
     walker.object_concept(root_name(schema, path), schema, f"jsonschema {path.name}")
     for key in ("$defs", "definitions"):
         for name in schema.get(key, {}) or {}:

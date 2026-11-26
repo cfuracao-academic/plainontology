@@ -38,6 +38,7 @@ class Column:
     comment: str = ""
     max_length: int | None = None
     pattern: str = ""
+    patterns: list[str] = field(default_factory=list)  # from CHECK constraints (all must match)
 
 
 @dataclass
@@ -188,8 +189,10 @@ def _apply_checks(table: Table, dialect: str) -> tuple[dict[str, dict[str, str]]
                 lower = f.kind in ("min", "length_min")
                 value = math.floor(value) + 1 if lower else math.ceil(value) - 1  # x > 2.5 on integers is x >= 3
             r = rules.setdefault(col.name, {})
-            if f.kind in ("min", "max"):
-                r[f.kind] = _num(value)
+            if f.kind == "min":  # several CHECKs: the strictest bound wins
+                r["min"] = _num(max(value, float(r["min"])) if "min" in r else value)
+            elif f.kind == "max":
+                r["max"] = _num(min(value, float(r["max"])) if "max" in r else value)
             elif f.kind == "length_max":
                 col.max_length = min(int(value), col.max_length) if col.max_length else int(value)
             elif f.kind == "length_min":
@@ -199,7 +202,10 @@ def _apply_checks(table: Table, dialect: str) -> tuple[dict[str, dict[str, str]]
                 if usable is None:
                     notes.append(f"check: {sql} (the regex is not usable outside the database)")
                 else:
-                    col.pattern = col.pattern or usable
+                    if dialect == "mysql":  # MySQL compares with case-insensitive collations by default
+                        usable = "(?i)" + usable
+                    if usable not in col.patterns:
+                        col.patterns.append(usable)
     return rules, notes
 
 
@@ -219,6 +225,9 @@ def _children(col: Column, rules: dict[str, str], notes: list[str]) -> list[Stat
             notes.append(f"{col.name} must match {col.pattern} (the regex is not usable outside the database)")
         else:
             out.append(Statement("pattern", value=usable, tag=AUTO))
+    for extra in col.patterns:
+        if all(s.value != extra for s in out if s.kind == "pattern"):
+            out.append(Statement("pattern", value=extra, tag=AUTO))
     return out
 
 
@@ -240,6 +249,18 @@ def _concept_names(tables: list[Table], warnings: list[str] | None) -> dict[str,
         taken[name] = t.name
         names[t.name] = name
     return names
+
+
+def _claim(used: set[str], wanted: str, fallback: str, what: str, warnings: list[str] | None) -> str:
+    """A property name not yet used in the concept; a warning when it had to change."""
+    name = wanted if wanted not in used else fallback
+    n = 2
+    while name in used:
+        name, n = f"{fallback}_{n}", n + 1
+    if name != wanted and warnings is not None:
+        warnings.append(f"{what} would be property {wanted}, which is taken; it is {name}")
+    used.add(name)
+    return name
 
 
 def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | None = None) -> list[Concept]:
@@ -272,10 +293,25 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
         if t.kind == "view":
             concept.add(Statement("note", value="database view (read-only)", tag=AUTO))
         single_key = len(t.primary_key) == 1
-        prop_name = {c.name: safe_name(c.name) for c in t.columns}
+        prop_name: dict[str, str] = {}
+        used: set[str] = set()
+        for c in t.columns:
+            if c.name not in fk_cols:
+                prop_name[c.name] = _claim(
+                    used, safe_name(c.name), safe_name(c.name), f"{t.name}: column {c.name}", warnings
+                )
+        fk_names: list[str] = []
         for fk in fks:
-            if len(fk.columns) == 1:
-                prop_name[fk.columns[0]] = relation_name(fk.columns[0])
+            first_column = fk.columns[0]
+            name = _claim(
+                used,
+                relation_name(first_column),
+                safe_name(first_column),
+                f"{t.name}: foreign key {','.join(fk.columns)}",
+                warnings,
+            )
+            fk_names.append(name)
+            prop_name.setdefault(first_column, name)
         for col in t.columns:
             if col.name in fk_cols:
                 continue
@@ -293,12 +329,13 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
             )
             line.children = _children(col, rules.get(col.name, {}), notes)
             concept.add(line)
-        for fk in fks:
+        for fk, rel in zip(fks, fk_names, strict=False):
             target = cnames.get(fk.table, concept_name(fk.table))
-            rel = prop_name[fk.columns[0]] if len(fk.columns) == 1 else target[:1].lower() + target[1:]
-            required = all((c := t.column(n)) is not None and (c.not_null or n in t.primary_key) for n in fk.columns)
-            first = t.column(fk.columns[0]) if len(fk.columns) == 1 else None
-            comment = first.comment if first is not None else ""
+            required = all(
+                (fk_col := t.column(n)) is not None and (fk_col.not_null or n in t.primary_key) for n in fk.columns
+            )
+            source_col = t.column(fk.columns[0]) if len(fk.columns) == 1 else None
+            comment = source_col.comment if source_col is not None else ""
             detail = f"fk {t.name}.{','.join(fk.columns)}"
             concept.add(
                 Statement(

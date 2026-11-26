@@ -34,14 +34,21 @@ def _cmd_refresh(args) -> int:
     return 0
 
 
-_SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".tox", ".mypy_cache", "site"}
+_SKIP_DIRS = {"node_modules", "__pycache__"}
+
+
+def _skipped(folder: Path) -> bool:
+    """Hidden folders (.git, .venv), node_modules, __pycache__ and virtual environments."""
+    return folder.name.startswith(".") or folder.name in _SKIP_DIRS or (folder / "pyvenv.cfg").exists()
 
 
 def _find_onto_files() -> list[str]:
-    """All .onto files under the current folder, skipping hidden and tool folders."""
+    """All .onto files under the current folder, except in hidden folders,
+    node_modules, __pycache__ and virtual environments."""
     found = []
     for path in sorted(Path().rglob("*.onto")):
-        if not any(part in _SKIP_DIRS or part.startswith(".") for part in path.parts[:-1]):
+        folders = [Path(*path.parts[: i + 1]) for i in range(len(path.parts) - 1)]
+        if not any(_skipped(f) for f in folders):
             found.append(path.as_posix())
     return found
 
@@ -124,6 +131,9 @@ def _cmd_validate(args) -> int:
     data = json.loads(raw)
     records = data if isinstance(data, list) else [data]
     onto = load(args.file)
+    if onto.find(args.concept) is None:
+        print(f"plainonto: no concept named {args.concept} in {args.file}", file=sys.stderr)
+        return 2
     failed = 0
     for i, record in enumerate(records):
         issues = validate_record(onto, args.concept, record)
@@ -217,7 +227,24 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _utf8_output() -> None:
+    """Write UTF-8 when output goes to a file or pipe (on Windows the default
+    code page cannot show names such as 日本), and never crash on a character."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            if stream.isatty():
+                reconfigure(errors="replace")
+            else:
+                reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_output()
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

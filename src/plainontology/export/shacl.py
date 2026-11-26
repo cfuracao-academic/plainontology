@@ -17,6 +17,8 @@ class's shape to instances of its subclasses.
 
 from __future__ import annotations
 
+import re
+
 from ..model import Concept, Ontology, Statement, enum_values, length_bounds
 from .rdf import XSD, Namer, base_of, literal, typed
 
@@ -31,8 +33,9 @@ FORMAT_PATTERNS = {
 
 
 def _number(value: str, integer: bool) -> str:
-    if integer and float(value).is_integer():
-        return typed(str(int(float(value))), "xsd:integer")
+    """Exact, from the text (no float rounding of big integers)."""
+    if re.fullmatch(r"-?\d+", value):
+        return typed(value, "xsd:integer" if integer else "xsd:decimal")
     return typed(value, "xsd:decimal")
 
 
@@ -79,6 +82,7 @@ def _property(n: Namer, c: Concept, s: Statement) -> str:
 
 
 def to_shacl(onto: Ontology, base: str | None = None) -> str:
+    onto = onto.accepted()
     base = base_of(onto, base)
     n = Namer(onto, base, _STANDARD)
     blocks = []

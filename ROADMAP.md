@@ -21,7 +21,7 @@
 - [ ] RAG metadata extractor (field names and values in a vector store's payloads)
 - [x] GitHub Action: `plainonto drift` on pull requests, with the report as a comment (0.2.0)
 - [x] dbt extractor, pre-commit hooks, VS Code syntax highlighting, docs site (0.2.0)
-- [ ] Results on public sample databases (Pagila, Sakila, Chinook) in the docs
+- [x] Results on public sample databases (Pagila, Sakila) in the docs and in CI (0.2.0)
 - [ ] Publish the Action on the GitHub Marketplace and the VS Code extension on the VS Code Marketplace
 - [ ] Import from Turtle/SKOS so an existing vocabulary can seed the meaning layer
 - [ ] `plainonto diff A.onto B.onto` between two files or two commits

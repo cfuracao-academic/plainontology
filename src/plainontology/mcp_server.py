@@ -151,6 +151,11 @@ def build_server(path: Path, allow_proposals: bool = False) -> MCPServer:
             existing = next((s for s in lines if s.key() == statement.key()), None)
             if existing is not None and existing.body() == statement.body():
                 return f"Already present: {existing.render()}"
+            if existing is not None:
+                return (
+                    f"Not added: {concept} already has '{existing.render()}'. A proposal cannot replace an "
+                    "existing line; propose a note instead, or ask a person to change it."
+                )
             lines.append(statement)
             try:
                 save(path, onto)

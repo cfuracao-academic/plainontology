@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -77,7 +78,10 @@ def _check_children(c: Concept, prop: Statement, issues: list[Issue]) -> None:
 
 
 def check(onto: Ontology) -> list[Issue]:
-    issues: list[Issue] = []
+    issues: list[Issue] = [
+        Issue("warning", "(header)", f"prefix {name or ':'} is declared more than once; the last line counts")
+        for name in dict.fromkeys(onto.duplicate_prefixes)
+    ]
     for c in onto.concepts.values():
         seen: dict[tuple, Statement] = {}
         props = {s.name for s in onto.all_properties(c)}
@@ -130,8 +134,8 @@ _MAX_DEPTH = 6
 # The same strict ISO 8601 shapes on every Python version.
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DATETIME = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?$")
-_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_URI = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:\S+$")
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+\Z")
+_URI = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:\S+\Z")
 _HOST = re.compile(
     r"^(?=.{1,253}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
 )
@@ -160,9 +164,37 @@ def _format_ok(fmt: str, value: str) -> bool:
     return True
 
 
+def end_anchored(pattern: str) -> str:
+    """Python's ``$`` also matches before a final newline; JSON Schema's does not.
+    Rewrite each ``$`` outside a character class as ``\\Z``."""
+    out, i, in_class = [], 0, False
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\" and i + 1 < len(pattern):
+            out.append(pattern[i : i + 2])
+            i += 2
+            continue
+        if ch == "[" and not in_class:
+            in_class = True
+        elif ch == "]" and in_class:
+            in_class = False
+        out.append("\\Z" if ch == "$" and not in_class else ch)
+        i += 1
+    return "".join(out)
+
+
+def _iso(value: str) -> str:
+    """Normalise an ISO 8601 time so every Python version reads it the same way."""
+    value = re.sub(r"Z$", "+00:00", value)
+    value = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", value)
+    return re.sub(r"\.(\d{1,6})(?=[+-]|$)", lambda m: "." + m[1].ljust(6, "0"), value)
+
+
 def _rules(where: str, s: Statement, value: Any) -> list[str]:
     out = []
     for rule in s.children:
+        if rule.is_proposed:
+            continue  # proposals do not count until a person accepts them
         if rule.kind in ("min", "max") and isinstance(value, (int, float)) and not isinstance(value, bool):
             bound = float(rule.value)
             if (rule.kind == "min" and value < bound) or (rule.kind == "max" and value > bound):
@@ -174,7 +206,7 @@ def _rules(where: str, s: Statement, value: Any) -> list[str]:
             low, high = length_bounds(rule.value)
             if (low is not None and len(value) < low) or (high is not None and len(value) > high):
                 out.append(f"{where}: length {len(value)} is outside {rule.value}")
-        elif rule.kind == "pattern" and isinstance(value, str) and not re.search(rule.value, value):
+        elif rule.kind == "pattern" and isinstance(value, str) and not re.search(end_anchored(rule.value), value):
             out.append(f"{where}: '{value}' does not match the pattern {rule.value}")
         elif rule.kind == "format" and isinstance(value, str) and not _format_ok(rule.name, value):
             out.append(f"{where}: '{value}' is not a valid {rule.name}")
@@ -217,7 +249,7 @@ def _check_value(onto: Ontology, where: str, s: Statement, value: Any, depth: in
     elif t == "integer":
         ok = isinstance(value, int) and not isinstance(value, bool)
     elif t == "decimal":
-        ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
     elif t == "boolean":
         ok = isinstance(value, bool)
     elif t in ("date", "datetime"):
@@ -228,7 +260,7 @@ def _check_value(onto: Ontology, where: str, s: Statement, value: Any, depth: in
                 if t == "date":
                     date.fromisoformat(value)
                 else:
-                    datetime.fromisoformat(re.sub(r"Z$", "+00:00", value))
+                    datetime.fromisoformat(_iso(value))
             except ValueError:
                 ok = False
     if not ok:
@@ -245,7 +277,7 @@ def validate_record(onto: Ontology, concept_name: str, record: Any, depth: int =
         return [f"unknown concept '{concept_name}'"]
     if not isinstance(record, dict):
         return [f"{prefix}{concept.name}: a record must be a JSON object"]
-    props = {s.name: s for s in onto.all_properties(concept)}
+    props = {s.name: s for s in onto.all_properties(concept) if not s.is_proposed}
     issues = [f"{prefix}{k}: not a property of {concept.name}" for k in record if k not in props]
     for name, s in props.items():
         where = f"{prefix}{name}"

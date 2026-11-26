@@ -45,6 +45,22 @@ _NOT_DRIFT = ("kept_yours", "warning")
 RENAME_SIMILARITY = 0.6
 
 
+def _printable(text: str) -> str:
+    """Report lines never contain a line break or control character (table names
+    can), so a report can be put into CI outputs and comments safely."""
+    out = []
+    for ch in text:
+        if ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif not ch.isprintable() and ch != " ":
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 @dataclass
 class Change:
     kind: str
@@ -94,7 +110,7 @@ class DriftReport:
     def render(self) -> str:
         if not self.changes:
             return "No drift: the file matches its sources."
-        lines = [c.render() for c in self.changes]
+        lines = [_printable(c.render()) for c in self.changes]
         drift = sum(1 for c in self.changes if c.kind not in _NOT_DRIFT)
         kept = sum(1 for c in self.changes if c.kind == "kept_yours")
         warned = len(self.warnings)
@@ -117,8 +133,36 @@ def _merge_children(old: list[Statement], new: list[Statement], where: str, repo
     return _merge_lines(old, new, where, report, renames=False)
 
 
+def _unique_pairs(scores: list[tuple[float, str, str]]) -> dict[str, str]:
+    """Pairs (a, b) where b is a's single best match and a is b's single best
+    match. Anything tied or contested is left out: reported, not guessed."""
+    best_for_a: dict[str, list[tuple[float, str]]] = {}
+    best_for_b: dict[str, list[tuple[float, str]]] = {}
+    for score, a, b in scores:
+        best_for_a.setdefault(a, []).append((score, b))
+        best_for_b.setdefault(b, []).append((score, a))
+
+    def single_best(options: list[tuple[float, str]]) -> str | None:
+        options = sorted(options, reverse=True)
+        if len(options) > 1 and options[0][0] == options[1][0]:
+            return None
+        return options[0][1]
+
+    pairs = {}
+    for a, options in best_for_a.items():
+        chosen = single_best(options)
+        if chosen is not None and single_best(best_for_b[chosen]) == a and len(best_for_b[chosen]) == 1:
+            pairs[a] = chosen
+    return pairs
+
+
 def _merge_lines(
-    old: list[Statement], new: list[Statement], where: str, report: DriftReport, renames: bool = True
+    old: list[Statement],
+    new: list[Statement],
+    where: str,
+    report: DriftReport,
+    renames: bool = True,
+    target_map: dict[str, str] | None = None,
 ) -> list[Statement]:
     yours = [s for s in old if not s.is_auto]
     your_keys = {s.key() for s in yours if s.kind != "comment"}
@@ -131,14 +175,26 @@ def _merge_lines(
     # and exactly one new extracted property of the same kind and type.
     renamed: dict[tuple, Statement] = {}  # new key -> old statement
     if renames:
+        targets = target_map or {}
         added = [s for k, s in fresh.items() if s.is_property and k not in old_keys and k not in your_keys]
-        for s in old:
-            if not (s.is_auto and s.is_property) or s.key() in fresh or not _has_yours(s):
-                continue
-            matches = [a for a in added if a.kind == s.kind and a.target == s.target and a.key() not in renamed]
-            if len(matches) == 1:
-                renamed[matches[0].key()] = s
+        gone = [s for s in old if s.is_auto and s.is_property and s.key() not in fresh and _has_yours(s)]
+        candidates = [
+            (1.0, s.name, a.name)
+            for s in gone
+            for a in added
+            if a.kind == s.kind and a.target == targets.get(s.target, s.target)
+        ]
+        by_name = {s.name: s for s in gone}
+        for old_name, new_name in _unique_pairs(candidates).items():
+            renamed[("prop", new_name)] = by_name[old_name]
     renamed_old = {id(s) for s in renamed.values()}
+
+    # Lines of yours under an extracted line that you overrode with your own line
+    # of the same key move to your line, so overriding never loses them.
+    orphans: dict[tuple, list[Statement]] = {}
+    for s in old:
+        if s.is_auto and s.is_property and s.key() in your_keys:
+            orphans.setdefault(s.key(), []).extend(c for c in s.children if not c.is_auto)
 
     merged: list[Statement] = []
     placed: set[tuple] = set()
@@ -151,6 +207,7 @@ def _merge_lines(
                 mine.children = _merge_children(
                     s.children, match.children if match else [], f"{where}.{s.name}", report
                 )
+                mine.children += copy.deepcopy(orphans.pop(key, []))
             merged.append(mine)
             continue
         if key in your_keys or key in placed or id(s) in renamed_old:
@@ -171,6 +228,7 @@ def _merge_lines(
         if replacement.render() != s.render():
             report.add("changed", where, replacement.body(), s.body())
         line = copy.deepcopy(replacement)
+        line.blank_before = s.blank_before
         if s.is_property:
             line.children = _merge_children(s.children, replacement.children, f"{where}.{s.name}", report)
         merged.append(line)
@@ -206,32 +264,29 @@ def _holds_yours(concept: Concept) -> bool:
     )
 
 
-def _concept_renames(current: Ontology, fresh: Ontology) -> dict[str, str]:
-    """Map old concept name -> new concept name for likely renames."""
+def _concept_renames(current: Ontology, fresh: Ontology, only_yours: bool = True) -> dict[str, str]:
+    """Map old concept name -> new concept name for clear renames only. With
+    ``only_yours`` just concepts holding lines of yours (the ones whose lines move);
+    without it every extracted concept (to follow relations to renamed targets)."""
     gone = [
         c
         for n, c in current.concepts.items()
-        if n not in fresh.concepts and c.tag is not None and c.tag.kind == "auto" and _holds_yours(c)
+        if n not in fresh.concepts
+        and c.tag is not None
+        and c.tag.kind == "auto"
+        and (_holds_yours(c) or not only_yours)
     ]
     new = [c for n, c in fresh.concepts.items() if n not in current.concepts]
-    renames: dict[str, str] = {}
-    taken: set[str] = set()
+    scores: list[tuple[float, str, str]] = []
     for old in gone:
         old_props = _prop_names(old)
-        scored = []
         for cand in new:
-            if cand.name in taken:
-                continue
             cand_props = {s.name for s in cand.properties()}
             union = old_props | cand_props
             shared = old_props & cand_props
             if union and len(shared) >= 2 and len(shared) / len(union) >= RENAME_SIMILARITY:
-                scored.append((len(shared) / len(union), cand.name))
-        scored.sort(reverse=True)
-        if scored and (len(scored) == 1 or scored[0][0] > scored[1][0]):
-            renames[old.name] = scored[0][1]
-            taken.add(scored[0][1])
-    return renames
+                scores.append((len(shared) / len(union), old.name, cand.name))
+    return _unique_pairs(scores)
 
 
 def merge(current: Ontology, fresh: Ontology, renames: bool = True) -> tuple[Ontology, DriftReport]:
@@ -246,6 +301,9 @@ def merge(current: Ontology, fresh: Ontology, renames: bool = True) -> tuple[Ont
         sources=list(current.sources),
         trailing_comments=list(current.trailing_comments),
         preamble=list(current.preamble),
+        from_file=current.from_file,
+        newline=current.newline,
+        trailing_blank_before=current.trailing_blank_before,
     )
     for prefix, iri in fresh.prefixes.items():
         out.prefixes.setdefault(prefix, iri)
@@ -254,6 +312,7 @@ def merge(current: Ontology, fresh: Ontology, renames: bool = True) -> tuple[Ont
         report.add("warning", concept, message)
     detect_renames = renames
     rename_map = _concept_renames(current, fresh) if detect_renames else {}
+    target_map = _concept_renames(current, fresh, only_yours=False) if detect_renames else {}
     renamed_to = set(rename_map.values())
 
     order: list[tuple[str, str]] = []  # (old name or "", new name)
@@ -288,12 +347,18 @@ def merge(current: Ontology, fresh: Ontology, renames: bool = True) -> tuple[Ont
             report.add("concept_kept", name, old.header())
             continue
 
-        statements = _merge_lines(old.statements, new.statements, name, report, renames=detect_renames)
+        statements = _merge_lines(
+            old.statements, new.statements, name, report, renames=detect_renames, target_map=target_map
+        )
         if old.tag is None or old.tag.kind != "auto":
             # A person's (or a proposed) concept stays theirs; extracted lines still refresh inside it.
             out.concepts[name] = Concept(name, old.tag, statements, list(old.leading_comments), old.raw_header)
         else:
             out.concepts[name] = Concept(name, new.tag, statements, list(old.leading_comments))
+
+    for old_name, name in order:  # keep the blank lines above each concept
+        if old_name and name in out.concepts:
+            out.concepts[name].blank_before = current.concepts[old_name].blank_before
 
     # M3: lines of yours that still point to a renamed concept are reported, never rewritten.
     for old_name, new_name in rename_map.items():

@@ -59,16 +59,16 @@ The core has no dependencies beyond the Python standard library. Extras: `mcp` f
 pip install "plainontology[all]"     # or just [mcp], [postgres], [mysql], [openapi]
 
 cd examples
-plainonto init library.onto --from sqlite:library.sql --from tools:agent-tools.json
-# edit library.onto: add definitions, synonyms, same_as mappings
-plainonto refresh library.onto       # re-extract; your lines stay
-plainonto drift library.onto         # report only; exit 1 on drift
-plainonto check library.onto
-plainonto export library.onto --to turtle -o library.ttl
-plainonto export library.onto --to shacl -o library.shapes.ttl
-plainonto export library.onto --to linkml -o library.yaml
-plainonto validate library.onto Loan record.json
-plainonto rename library.onto Member Patron   # after a table rename that refresh did not detect
+plainonto init mine.onto --from sqlite:library.sql --from tools:agent-tools.json
+# edit mine.onto: add definitions, synonyms, same_as mappings
+plainonto refresh mine.onto       # re-extract; your lines stay
+plainonto drift mine.onto         # report only; exit 1 on drift
+plainonto check mine.onto
+plainonto export mine.onto --to turtle -o library.ttl
+plainonto export mine.onto --to shacl -o library.shapes.ttl
+plainonto export mine.onto --to linkml -o library.yaml
+plainonto validate mine.onto Loan record.json
+plainonto rename mine.onto Member Patron   # after a table rename that refresh did not detect
 ```
 
 The command is `plainonto` (short for `plainontology`; both work).

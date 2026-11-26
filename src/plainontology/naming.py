@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 _WORD_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+|[^\W\d_]+")
 
 
+def _word_char(ch: str) -> bool:
+    return ch.isalnum() or unicodedata.category(ch)[0] == "M"  # letters, digits and combining marks
+
+
 def words(text: str) -> list[str]:
-    return _WORD_RE.findall(text)
+    """Split a name into words. ASCII words split at camelCase; words in other
+    scripts are kept whole, combining marks included (café, पुस्तकें)."""
+    out: list[str] = []
+    run = ""
+    for ch in text + " ":
+        if _word_char(ch):
+            run += ch
+            continue
+        if run:
+            out += _WORD_RE.findall(run) if run.isascii() else [run]
+        run = ""
+    return out
 
 
 _IRREGULAR = {
@@ -69,7 +85,7 @@ def concept_name(table: str) -> str:
 def safe_name(text: str) -> str:
     """A property name the file format accepts: starts with a letter (any script)
     or ``_``, then letters, digits, ``_ . -``."""
-    name = re.sub(r"[^\w.-]", "_", text.strip()) or "_"
+    name = "".join(ch if _word_char(ch) or ch in "_.-" else "_" for ch in text.strip()) or "_"
     return name if re.match(r"[^\W\d]", name) else "_" + name
 
 

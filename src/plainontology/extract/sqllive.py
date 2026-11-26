@@ -45,6 +45,11 @@ def resolve_url(location: str) -> str:
     A URL written in the source line itself must not hold a password, because
     the source line is saved in the ontology file.
     """
+    if os.environ.get("PLAINONTO_NO_LIVE"):
+        raise ValueError(
+            "live database sources are switched off here (PLAINONTO_NO_LIVE is set); "
+            "use a schema dump, or set allow-live-databases in the GitHub Action"
+        )
     if location.startswith("env:"):
         var = location[4:]
         url = os.environ.get(var)
@@ -251,11 +256,18 @@ def tables_from_database(url: str) -> list[Table]:
                     tables.append(_read(insp, conn, engine, name, schema, default, "view", triggers, domains))
         by_name = {t.name: t for t in tables}
         counts: dict[str, int] = {}
-        for child, parent in partition_of.items():
-            if child in by_name and parent in by_name:
-                counts[parent] = counts.get(parent, 0) + 1
-                fold_partition(by_name[parent], by_name[child])
-        tables = [t for t in tables if not (t.name in partition_of and partition_of[t.name] in by_name)]
+        roots: dict[str, str] = {}
+        for child in partition_of:
+            root, seen = partition_of[child], {child}
+            while root in partition_of and root not in seen:  # sub-partitions fold into the top table
+                seen.add(root)
+                root = partition_of[root]
+            if root in by_name:
+                roots[child] = root
+                counts[root] = counts.get(root, 0) + 1
+                if child in by_name:
+                    fold_partition(by_name[root], by_name[child])
+        tables = [t for t in tables if t.name not in roots]
         for parent, n in counts.items():
             key = partition_keys.get(parent)
             by_name[parent].notes.append(

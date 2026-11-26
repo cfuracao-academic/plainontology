@@ -9,6 +9,7 @@ read when sqlglot is installed (any of the ``postgres``/``mysql`` extras).
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 
 from ..model import Concept
@@ -43,15 +44,23 @@ def _no_files(action: int, arg1, arg2, dbname, source) -> int:
     return sqlite3.SQLITE_OK
 
 
+SCRIPT_SECONDS = 10
+
+
 def _connect(path: Path) -> sqlite3.Connection:
     if path.suffix.lower() == ".sql":
         con = sqlite3.connect(":memory:")
         con.set_authorizer(_no_files)
+        deadline = time.monotonic() + SCRIPT_SECONDS
+        # A schema file loads in milliseconds; stop one that runs away (an endless query).
+        con.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 10_000)
         try:
             con.executescript(path.read_text(encoding="utf-8-sig"))
         except sqlite3.DatabaseError as exc:
             con.close()
-            raise ValueError(f"{path.name}: {exc}") from None
+            reason = f"stopped after {SCRIPT_SECONDS} seconds" if time.monotonic() > deadline else str(exc)
+            raise ValueError(f"{path.name}: {reason}") from None
+        con.set_progress_handler(None, 0)
         return con
     if not path.exists():
         raise FileNotFoundError(path)
@@ -67,7 +76,7 @@ def _columns(con: sqlite3.Connection, name: str, table: Table) -> list[tuple[int
     return keyed
 
 
-def read_tables(con: sqlite3.Connection) -> list[Table]:
+def read_tables(con: sqlite3.Connection, warnings: list[str] | None = None) -> list[Table]:
     rows = con.execute(
         "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'view', 'trigger') "
         "AND name NOT LIKE 'sqlite_%' ORDER BY rowid"
@@ -77,7 +86,12 @@ def read_tables(con: sqlite3.Connection) -> list[Table]:
         if kind == "trigger":
             continue
         t = Table(name, kind=kind)
-        keyed = _columns(con, name, t)
+        try:
+            keyed = _columns(con, name, t)
+        except sqlite3.OperationalError as exc:  # a view over a table that no longer exists
+            if warnings is not None:
+                warnings.append(f"{kind} {name} could not be read and is skipped: {exc}")
+            continue
         if kind == "view":
             for col in t.columns:
                 col.not_null = False
@@ -116,7 +130,7 @@ def read_tables(con: sqlite3.Connection) -> list[Table]:
 def extract_sqlite(path: Path, warnings: list[str] | None = None) -> list[Concept]:
     con = _connect(path)
     try:
-        tables = read_tables(con)
+        tables = read_tables(con, warnings)
     finally:
         con.close()
     return tables_to_concepts(tables, "sqlite", warnings)

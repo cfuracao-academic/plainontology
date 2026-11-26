@@ -57,10 +57,12 @@ def _json_schema(content: dict | None) -> dict | None:
     return None
 
 
-def extract_openapi(path: Path) -> list[Concept]:
+def extract_openapi(path: Path, warnings: list[str] | None = None) -> list[Concept]:
     path = path.resolve()
     doc = load_document(path)
     walker = SchemaWalker(doc, path.name, path)
+    if warnings is not None:
+        walker.shared.warnings = warnings
     walker.kind = "openapi"
     swagger = "swagger" in doc
     pointer = "#/definitions/" if swagger else "#/components/schemas/"
@@ -98,9 +100,14 @@ def extract_openapi(path: Path) -> list[Concept]:
 
 def _operation(walker: SchemaWalker, route: str, method: str, op: dict, shared: list, swagger: bool) -> None:
     name = _operation_name(op, method, route)
+    if name in walker.concepts:  # a schema of the same name, or GET /books and GET /books/
+        wanted, name, n = name, f"{name}Operation", 2
+        while name in walker.concepts:
+            name, n = f"{wanted}Operation{n}", n + 1
+        walker.shared.warnings.append(
+            f"{method.upper()} {route} would be concept {wanted}, which is taken; it is {name}"
+        )
     concept = Concept(name, Tag("auto", f"openapi {method.upper()} {route}"))
-    if name in walker.concepts:
-        return
     walker.concepts[name] = concept
     concept.add(Statement("is_a", name="Operation", tag=AUTO))
     description = _clean(op.get("summary") or op.get("description"))
@@ -153,7 +160,8 @@ def _operation(walker: SchemaWalker, route: str, method: str, op: dict, shared: 
 def _body(walker: SchemaWalker, concept: Concept, schema: dict | None, required: bool) -> None:
     if not schema:
         return
-    if "$ref" in schema or schema.get("type") == "array":
+    composed = any(k in schema for k in ("oneOf", "anyOf", "allOf"))
+    if "$ref" in schema or schema.get("type") == "array" or composed or not schema.get("properties"):
         concept.add(walker._property(concept.name, "body", schema, required))
         return
     for pname, ps in (schema.get("properties") or {}).items():

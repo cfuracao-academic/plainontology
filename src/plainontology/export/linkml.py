@@ -44,7 +44,17 @@ def _scalar(value) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
+_YAML_WORDS = {"y", "yes", "n", "no", "true", "false", "on", "off", "null", "~"}
+
+
 def _key(k: str) -> str:
+    """Quote keys YAML would read as booleans, nulls or numbers (Yes, ON, Null, 1.5)."""
+    if k.lower() in _YAML_WORDS or re.fullmatch(r"[-+]?(\d[\d_]*)?(\.\d*)?([eE][-+]?\d+)?", k):
+        return json.dumps(k, ensure_ascii=False)
+    return _key_plain(k)
+
+
+def _key_plain(k: str) -> str:
     plain = _PLAIN_KEY.match(k) and k not in ("true", "false", "null", "yes", "no", "on", "off")
     return k if plain else json.dumps(k, ensure_ascii=False)
 
@@ -78,8 +88,10 @@ def _yaml(obj: dict, indent: int = 0) -> list[str]:
 
 
 def _number(value: str):
-    f = float(value)
-    return int(f) if f.is_integer() else f
+    """Exact, from the text (no float rounding of big integers)."""
+    if re.fullmatch(r"-?\d+", value):
+        return int(value)
+    return float(value)
 
 
 def _texts(element: dict, statements: list[Statement]) -> None:
@@ -134,6 +146,7 @@ def _rules(attr: dict, prop: Statement) -> None:
 
 
 def to_linkml(onto: Ontology, name: str = "ontology", base: str | None = None) -> str:
+    onto = onto.accepted()
     base_iri: str = base or onto.prefixes.get("") or DEFAULT_BASE
     schema_name = safe_name(name).replace(".", "_")
     if schema_name in onto.prefixes or onto.prefix_iri(schema_name) or schema_name == "linkml":

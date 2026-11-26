@@ -166,6 +166,7 @@ class Statement:
     # a refresh never changes the text of a person's line. Cleared on any edit.
     raw: str = field(default="", compare=False)
     blank_before: int = field(default=0, compare=False)  # blank lines above it in the file
+    col0: bool = field(default=False, compare=False)  # a comment written at the start of the line
 
     @property
     def is_auto(self) -> bool:
@@ -195,6 +196,8 @@ class Statement:
             return (self.kind, self.name)
         if self.kind == "unique":
             return ("unique", ", ".join(sorted(unique_columns(self.name))))
+        if self.kind == "pattern":  # several patterns may apply; all must match
+            return (self.kind, self.value)
         if self.kind in RULE_KINDS:
             return (self.kind,)
         return (self.kind, self.value)
@@ -246,6 +249,7 @@ class Concept:
     statements: list[Statement] = field(default_factory=list)
     leading_comments: list[str] = field(default_factory=list)
     raw_header: str = field(default="", compare=False)
+    blank_before: int = field(default=1, compare=False)  # blank lines above the concept
 
     def header(self) -> str:
         return f"concept {self.name}" + (f" {self.tag.render()}" if self.tag else "")
@@ -283,9 +287,14 @@ class Ontology:
     trailing_comments: list[str] = field(default_factory=list)
     # (concept, message) pairs found while extracting; never written to the file
     warnings: list[tuple[str, str]] = field(default_factory=list)
-    # The lines before the first concept, in file order: ("comment", text),
-    # ("prefix", name), ("source", spec) or ("blank", ""). Empty for new files.
-    preamble: list[tuple[str, str]] = field(default_factory=list)
+    # The lines before the first concept, in file order, as (kind, value, raw text):
+    # ("comment", text, raw), ("prefix", name, raw), ("source", spec, raw) or
+    # ("blank", "", ""). Empty for new files.
+    preamble: list[tuple[str, str, str]] = field(default_factory=list)
+    from_file: bool = False  # read from a file (then no default header is added)
+    newline: str = "\n"  # the file's line ending, kept on write
+    trailing_blank_before: int = 1
+    duplicate_prefixes: list[str] = field(default_factory=list)
 
     def add_concept(self, concept: Concept) -> Concept:
         """Add a concept, folding its statements into an existing one of the same name."""
@@ -296,6 +305,19 @@ class Ontology:
         for s in concept.statements:
             existing.add(s)
         return existing
+
+    def accepted(self) -> Ontology:
+        """A copy without [proposed] concepts and lines, which do not count until
+        a person accepts them (used by the exports)."""
+        import copy
+
+        out = copy.deepcopy(self)
+        out.concepts = {n: c for n, c in out.concepts.items() if not (c.tag is not None and c.tag.kind == "proposed")}
+        for c in out.concepts.values():
+            c.statements = [s for s in c.statements if not s.is_proposed]
+            for s in c.statements:
+                s.children = [ch for ch in s.children if not ch.is_proposed]
+        return out
 
     def find(self, name: str) -> Concept | None:
         """Look a concept up by name, ignoring case."""
