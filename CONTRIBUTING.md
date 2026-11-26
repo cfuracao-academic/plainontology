@@ -24,6 +24,10 @@ pytest
 3. Register it in `EXTRACTORS` in `src/plainontology/extract/__init__.py`.
 4. Add an example under `examples/` and tests under `tests/`.
 
+## Demo GIF
+
+`docs/demo.gif` is drawn from real command output by `docs/demo/make_demo.py` (needs `pip install pillow`). Re-run it after changing commands or output.
+
 ## Releasing
 
 1. Set the new version in `pyproject.toml`, `src/plainontology/__init__.py` and `CITATION.cff` (a test checks they match), and add a CHANGELOG entry.

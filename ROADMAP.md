@@ -21,8 +21,8 @@
 
 ## Community and visibility
 
-- [ ] README demo GIF: extract, edit, refresh, your edit survives
+- [x] README demo GIF: extract, edit, refresh, your edit survives (`docs/demo/make_demo.py`)
 - [ ] Hugging Face Space: paste a schema, get the file
 - [ ] Hugging Face dataset: PlainOntology files extracted from public OpenAPI specs
-- [ ] Zenodo DOI for each release
+- [x] Zenodo DOI for each release
 - [ ] Demo paper (ISWC, ESWC or SEMANTiCS demo track)
