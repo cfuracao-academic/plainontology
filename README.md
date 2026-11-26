@@ -145,7 +145,7 @@ CI extracts two public sample databases at pinned versions on every push:
 
 | Schema | Result |
 |---|---|
-| [Pagila](https://github.com/devrimgunduz/pagila) (PostgreSQL) | 24 concepts from 71 tables: 55 monthly partitions fold into `Payment`, foreign keys declared on partitions carry up, a PostgreSQL 18 virtual column is read; no warnings, `check --strict` clean |
+| [Pagila](https://github.com/devrimgunduz/pagila) (PostgreSQL) | 25 concepts from 71 tables and 8 views (one materialized): 55 monthly partitions fold into `Payment`, foreign keys declared on partitions carry up, a PostgreSQL 18 virtual column is read; no warnings, `check --strict` clean |
 | [Sakila](https://github.com/jOOQ/sakila) (MySQL) | 23 concepts (16 tables, 7 views); no warnings, `check --strict` clean |
 
 Each takes about 0.4 seconds.

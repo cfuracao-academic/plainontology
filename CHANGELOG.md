@@ -59,6 +59,7 @@
 - PostgreSQL 18 virtual generated columns are read
 - A table the parser rejects is read column by column; anything skipped is reported as a `?` warning instead of disappearing
 - Function bodies with `$1` placeholders no longer crash the dump reader
+- MySQL views with `DEFINER`, `SQL SECURITY` or `ALGORITHM` and PostgreSQL materialized views (`WITH NO DATA`) are read; any `CREATE TABLE` or `CREATE VIEW` that still cannot be read is a warning, never silence
 
 **More sources**
 - `openapi:` (OpenAPI 3.x, Swagger 2.0; JSON or YAML): schemas become concepts, operations become concepts with parameters, body and `returns`

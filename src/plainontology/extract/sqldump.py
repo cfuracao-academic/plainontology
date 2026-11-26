@@ -53,6 +53,19 @@ _SCHEMA_STATEMENT = re.compile(
     r"^\s*(CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNLOGGED\s+|TEMP\w*\s+)?(?:TABLE|VIEW|TYPE|DOMAIN|UNIQUE\s+INDEX)|ALTER\s+TABLE|COMMENT\s+ON)\b",
     re.I,
 )
+# CREATE with modifiers before TABLE or VIEW (DEFINER=..., SQL SECURITY ..., ALGORITHM=...),
+# but not a function, procedure or trigger.
+_CREATES_RELATION = re.compile(
+    r"^\s*CREATE\b(?:(?!\(|\bFUNCTION\b|\bPROCEDURE\b|\bTRIGGER\b|\bAS\b).){0,200}?\b(TABLE|VIEW)\b", re.I | re.S
+)
+_WITH_DATA = re.compile(r"\bWITH\s+(?:NO\s+)?DATA\s*;", re.I)
+# MySQL view modifiers the SQL parser does not know; they change nothing about the columns.
+_MYSQL_VIEW_MODIFIERS = re.compile(
+    r"CREATE\s+(OR\s+REPLACE\s+)?(?:ALGORITHM\s*=\s*\w+\s+)?"
+    r"(?:DEFINER\s*=\s*(?:`[^`]*`|'[^']*'|[^\s@]+)(?:\s*@\s*(?:`[^`]*`|'[^']*'|[^\s]+))?\s+)?"
+    r"(?:SQL\s+SECURITY\s+\w+\s+)?VIEW\b",
+    re.I,
+)
 _CREATE_TABLE = re.compile(
     r"^\s*(CREATE\s+(?:UNLOGGED\s+|TEMP\w*\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?\S+)\s*\((.*)\)([^)]*)$", re.I | re.S
 )
@@ -616,6 +629,9 @@ class _Reader:
             # mysqldump hides views and triggers in /*!NNNNN ... */ comments.
             sql = _VERSIONED.sub(lambda m: " " + m[1] + " ", sql)
             sql = _DELIMITER.sub("", sql).replace(";;", ";")
+            sql = _MYSQL_VIEW_MODIFIERS.sub(lambda m: f"CREATE {m[1] or ''}VIEW", sql)
+        # CREATE MATERIALIZED VIEW ... WITH [NO] DATA: the parser stops at the data clause.
+        sql = _WITH_DATA.sub(";", sql)
         self.prescan(sql)
         self.partitions(sql)
         try:
@@ -631,8 +647,13 @@ class _Reader:
                     body = "\n".join(line for line in chunk.splitlines() if not line.lstrip().startswith("--"))
                     if _CREATE_TABLE.match(body):
                         statements += self.salvage_table(body)
-                    elif _SCHEMA_STATEMENT.match(body):
+                    elif _SCHEMA_STATEMENT.match(body) or _CREATES_RELATION.match(body):
                         self.warnings.append(f"skipped a statement it could not read: {' '.join(body.split())[:70]}")
+        for node in statements:  # a table or view the parser kept as unread text
+            if isinstance(node, exp.Command) and str(node.this).upper() == "CREATE":
+                text = f"CREATE {node.expression.sql() if hasattr(node.expression, 'sql') else node.expression}"
+                if _CREATES_RELATION.match(text):
+                    self.warnings.append(f"skipped a statement it could not read: {' '.join(text.split())[:70]}")
         types_first = sorted(
             (s for s in statements if s is not None),
             key=lambda s: not (isinstance(s, exp.Create) and (s.args.get("kind") or "").upper() == "TYPE"),

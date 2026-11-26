@@ -139,7 +139,7 @@ jobs:
           plainonto check --strict pagila.onto sakila.onto
           plainonto drift pagila.onto sakila.onto
           if grep -q "warning" pagila.out sakila.out; then echo "unexpected warnings"; exit 1; fi
-          test "$(grep -c '^concept' pagila.onto)" = 24
+          test "$(grep -c '^concept' pagila.onto)" = 25
           test "$(grep -c '^concept' sakila.onto)" = 23
           grep -q '^concept Film ' pagila.onto
           grep -q '^concept Film ' sakila.onto
