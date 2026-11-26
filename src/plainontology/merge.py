@@ -217,10 +217,22 @@ def _merge_lines(
 
     merged: list[Statement] = []
     placed: set[tuple] = set()
+    placed_line: dict[tuple, Statement] = {}
+
+    def hand_over(s: Statement) -> None:
+        """A line skipped because its key is already written: its lines of yours
+        move under the written line, never dropped."""
+        line = placed_line.get(s.key())
+        yours_under = [c for c in s.children if not c.is_auto]
+        if line is not None and yours_under:
+            line.children += copy.deepcopy(yours_under)
+
     for s in old:
         key = s.key()
         if key in confirmed and not s.is_auto:
             if key in placed:
+                report.add("proposal_confirmed", where, placed_line[key].body(), s.body())
+                hand_over(s)
                 continue
             line = copy.deepcopy(fresh[key])
             line.blank_before = s.blank_before
@@ -229,6 +241,7 @@ def _merge_lines(
             report.add("proposal_confirmed", where, line.body(), s.body())
             merged.append(line)
             placed.add(key)
+            placed_line[key] = line
             continue
         if not s.is_auto:
             mine = copy.deepcopy(s)
@@ -245,7 +258,10 @@ def _merge_lines(
             mine = next(m for m in yours if m.key() == key)
             report.add("overridden", where, s.body(), mine.body())
             continue
-        if key in placed or id(s) in renamed_old:
+        if key in placed:
+            hand_over(s)
+            continue
+        if id(s) in renamed_old:
             continue
         replacement = fresh.get(key)
         if replacement is None:
@@ -268,6 +284,7 @@ def _merge_lines(
             line.children = _merge_children(s.children, replacement.children, f"{where}.{s.name}", report)
         merged.append(line)
         placed.add(key)
+        placed_line[key] = line
 
     for key, s in fresh.items():
         if key in placed:

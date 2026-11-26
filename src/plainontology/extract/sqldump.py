@@ -60,6 +60,29 @@ _SCHEMA_STATEMENT = re.compile(
 _CREATES_RELATION = re.compile(
     r"^\s*CREATE\b(?:(?!\(|\bFUNCTION\b|\bPROCEDURE\b|\bTRIGGER\b|\bAS\b).){0,200}?\b(TABLE|VIEW)\b", re.I | re.S
 )
+_CHARSET_INTRODUCER = re.compile(r"(?<![\w$])_(?:utf8mb4|utf8mb3|utf8|latin1|binary|ascii|ucs2|utf16|utf32)\s*'", re.I)
+_E_STRING = re.compile(r"(?<![\w$])[Ee]'((?:[^'\\]|\\.|'')*)'")
+_E_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f"}
+
+
+def _fold_identifiers(node):
+    """Lower-case unquoted identifiers, as PostgreSQL does (Authors and AUTHORS are authors)."""
+    if node is None or isinstance(node, exp.Command):
+        return node
+    from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
+
+    try:
+        return normalize_identifiers(node, dialect="postgres")
+    except Exception:  # an unusual tree: keep it as written
+        return node
+
+
+def _plain_string(m: re.Match) -> str:
+    """PostgreSQL E'...' (backslash escapes) as a standard '...' string."""
+    text = re.sub(r"\\(.)", lambda e: _E_ESCAPES.get(e[1], e[1]), m[1], flags=re.S)
+    return "'" + text.replace("''", "'").replace("'", "''") + "'"
+
+
 _WITH_DATA = re.compile(r"\bWITH\s+(?:NO\s+)?DATA\s*;", re.I)
 # MySQL view modifiers the SQL parser does not know; they change nothing about the columns.
 _MYSQL_VIEW_MODIFIERS = re.compile(
@@ -604,6 +627,8 @@ class _Reader:
         for m in _TRIGGER.finditer(sql):
             name, timing, events, schema, table = m[1], m[2], m[3], m[4], m[5]
             table_name = qualified(schema if self.dialect != "mysql" else None, table, self.defaults)
+            if table_name not in self.tables and self.dialect == "postgres":
+                table_name = table_name.lower()
             if (table_name, name) in seen or table_name not in self.tables:
                 continue
             seen.add((table_name, name))
@@ -622,7 +647,8 @@ class _Reader:
                 col.comment = text
 
     def qual_text(self, name: str) -> str:
-        parts = [p.strip('`"') for p in name.split(".")]
+        fold = self.dialect == "postgres"  # PostgreSQL folds unquoted names to lower case
+        parts = [p.strip('`"') if p[:1] in '`"' or not fold else p.lower() for p in name.split(".")]
         schema = parts[-2] if len(parts) > 1 and self.dialect != "mysql" else None
         return qualified(schema, parts[-1], self.defaults)
 
@@ -695,6 +721,9 @@ class _Reader:
             sql = _VERSIONED.sub(lambda m: " " + m[1] + " ", sql)
             sql = _DELIMITER.sub("", sql).replace(";;", ";")
             sql = _MYSQL_VIEW_MODIFIERS.sub(lambda m: f"CREATE {m[1] or ''}VIEW", sql)
+            sql = _CHARSET_INTRODUCER.sub("'", sql)  # _utf8mb4'text' is just 'text'
+        if self.dialect == "postgres":
+            sql = _E_STRING.sub(_plain_string, sql)  # E'\\d' is '\d'
         # CREATE MATERIALIZED VIEW ... WITH [NO] DATA: the parser stops at the data clause.
         sql = _WITH_DATA.sub(";", sql)
         self.prescan(sql)
@@ -719,6 +748,8 @@ class _Reader:
                 text = f"CREATE {node.expression.sql() if hasattr(node.expression, 'sql') else node.expression}"
                 if _CREATES_RELATION.match(text):
                     self.warnings.append(f"skipped a statement it could not read: {' '.join(text.split())[:70]}")
+        if self.dialect == "postgres":  # unquoted names are lower case, as PostgreSQL reads them
+            statements = [_fold_identifiers(s) for s in statements]
         types_first = sorted(
             (s for s in statements if s is not None),
             key=lambda s: not (isinstance(s, exp.Create) and (s.args.get("kind") or "").upper() == "TYPE"),

@@ -24,6 +24,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from ..model import AUTO, Concept, Statement, Tag, make_enum, number_text
 from ..naming import concept_name, pascal, plural, relation_name, safe_name
@@ -63,7 +64,12 @@ class Table:
     inherits: list[str] = field(default_factory=list)  # PostgreSQL INHERITS (parent tables)
 
     def column(self, name: str) -> Column | None:
-        return next((c for c in self.columns if c.name == name), None)
+        """The column of that name; failing that, of that name in any case (column names
+        are case-insensitive in PostgreSQL, unless quoted, and in MySQL)."""
+        found = next((c for c in self.columns if c.name == name), None)
+        if found is None:
+            found = next((c for c in self.columns if c.name.lower() == name.lower()), None)
+        return found
 
 
 def fold_partition(parent: Table, child: Table) -> None:
@@ -164,8 +170,12 @@ def python_pattern(pattern: str) -> str | None:
     return pattern
 
 
-def _apply_checks(table: Table, dialect: str) -> tuple[dict[str, dict[str, str]], list[str]]:
-    """Fold CHECK constraints into column enums and rules; return rules and notes."""
+def _apply_checks(
+    table: Table, dialect: str, link_columns: set[str] | frozenset[str] = frozenset()
+) -> tuple[dict[str, dict[str, str]], list[str]]:
+    """Fold CHECK constraints into column enums and rules; return rules and notes.
+    A check on a foreign key column (``link_columns``) stays a note: the column is
+    written as a relation, which has no rules."""
     from .sqlcheck import analyse
 
     rules: dict[str, dict[str, str]] = {}
@@ -173,6 +183,10 @@ def _apply_checks(table: Table, dialect: str) -> tuple[dict[str, dict[str, str]]
     for sql in table.checks:
         for f in analyse(sql, dialect):
             col = table.column(f.column) if f.column else None
+            if col is not None and col.name in link_columns:
+                if f"check: {sql}" not in notes:
+                    notes.append(f"check: {sql}")
+                continue
             if f.kind == "note" or col is None:
                 notes.append(f"check: {f.value if f.kind == 'note' else sql}")
                 continue
@@ -190,14 +204,14 @@ def _apply_checks(table: Table, dialect: str) -> tuple[dict[str, dict[str, str]]
                 lower = f.kind in ("min", "length_min")
                 value = math.floor(value) + 1 if lower else math.ceil(value) - 1  # x > 2.5 on integers is x >= 3
             r = rules.setdefault(col.name, {})
-            if f.kind == "min":  # several CHECKs: the strictest bound wins
-                r["min"] = _num(max(value, float(r["min"])) if "min" in r else value)
+            if f.kind == "min":  # several CHECKs: the strictest bound wins, compared exactly
+                r["min"] = _num(max(Decimal(str(value)), Decimal(r["min"])) if "min" in r else value)
             elif f.kind == "max":
-                r["max"] = _num(min(value, float(r["max"])) if "max" in r else value)
+                r["max"] = _num(min(Decimal(str(value)), Decimal(r["max"])) if "max" in r else value)
             elif f.kind == "length_max":
                 col.max_length = min(int(value), col.max_length) if col.max_length else int(value)
             elif f.kind == "length_min":
-                r["length_min"] = str(int(value))
+                r["length_min"] = str(max(int(value), int(r.get("length_min", 0))))
             elif f.kind == "pattern":
                 usable = python_pattern(str(value))
                 if usable is None:
@@ -273,20 +287,46 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
     concepts: dict[str, Concept] = {}
     join_links: list[tuple[Table, ForeignKey, ForeignKey]] = []
 
+    def links_two(t: Table, pure: set[str]) -> bool:
+        """Two single-column links to tables of the file that become concepts."""
+        fks = t.foreign_keys
+        return (
+            len(fks) == 2
+            and all(len(fk.columns) == 1 for fk in fks)
+            and all(fk.table in by_name and fk.table not in pure for fk in fks)
+        )
+
+    def keyed_by(t: Table) -> bool:
+        cols = {c for fk in t.foreign_keys for c in fk.columns}
+        return set(t.primary_key) == cols or any(set(u) == cols for u in t.unique_sets)
+
+    # Pure join tables (only the two links) become relations, not concepts. One that
+    # other tables link to stays a concept, so those links have a target.
+    referenced = {fk.table for t in tables for fk in t.foreign_keys if fk.table != t.name}
+    pure = {
+        t.name
+        for t in tables
+        if t.kind != "view"
+        and t.name not in referenced
+        and {c.name for c in t.columns} == {c for fk in t.foreign_keys for c in fk.columns}
+        and (keyed_by(t) or not t.primary_key)
+    }
+    while True:
+        still = {name for name in pure if links_two(by_name[name], pure - {name})}
+        if still == pure:
+            break
+        pure = still
+
     for t in tables:
-        rules, notes = _apply_checks(t, label)
+        link_cols = {c for fk in t.foreign_keys for c in fk.columns}
+        rules, notes = _apply_checks(t, label, link_cols)
         positions = {c.name: i for i, c in enumerate(t.columns)}
         fks = sorted(t.foreign_keys, key=lambda fk: min(positions.get(c, 0) for c in fk.columns))
         fk_cols = {c for fk in fks for c in fk.columns}
-        names = {c.name for c in t.columns}
-        # A join table links two tables of the file; a link to a table that is not
-        # there keeps the join table as a concept of its own.
-        two_links = len(fks) == 2 and all(len(fk.columns) == 1 for fk in fks) and all(fk.table in by_name for fk in fks)
-        keyed_by_links = set(t.primary_key) == fk_cols or any(set(u) == fk_cols for u in t.unique_sets)
-        if two_links and names == fk_cols:
+        if t.name in pure:
             join_links.append((t, fks[0], fks[1]))
             continue
-        if two_links and keyed_by_links:
+        if t.kind != "view" and links_two(t, pure) and keyed_by(t):
             join_links.append((t, fks[0], fks[1]))  # join table with data: also a concept
 
         kind = "view" if t.kind == "view" else "table"
@@ -316,7 +356,8 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
                 warnings,
             )
             fk_names.append(name)
-            prop_name.setdefault(first_column, name)
+            for column in fk.columns:  # every column of a composite link is that relation
+                prop_name.setdefault(column, name)
         for col in t.columns:
             if col.name in fk_cols:
                 continue
@@ -339,6 +380,12 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
             required = all(
                 (fk_col := t.column(n)) is not None and (fk_col.not_null or n in t.primary_key) for n in fk.columns
             )
+            # One link to one row: the link is the key, or a unique column (one-to-one).
+            one_to_one = (
+                set(fk.columns) == set(t.primary_key)
+                or (len(fk.columns) == 1 and fk.columns[0] in t.unique)
+                or any(set(u) == set(fk.columns) for u in t.unique_sets)
+            )
             source_col = t.column(fk.columns[0]) if len(fk.columns) == 1 else None
             comment = source_col.comment if source_col is not None else ""
             detail = f"fk {t.name}.{','.join(fk.columns)}"
@@ -347,7 +394,7 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
                     "rel",
                     name=rel,
                     target=target,
-                    flags=("required",) if required else (),
+                    flags=(("required",) if required else ()) + (("unique",) if one_to_one else ()),
                     value=comment,
                     tag=Tag("auto", detail),
                 )
@@ -356,7 +403,9 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
         if len(t.primary_key) > 1:
             sets.insert(0, list(t.primary_key))
         for cols in sets:
-            concept.add(Statement("unique", name=", ".join(prop_name.get(c, safe_name(c)) for c in cols), tag=AUTO))
+            names_in_set = list(dict.fromkeys(prop_name.get(c, safe_name(c)) for c in cols))
+            if len(names_in_set) > 1:  # a set that is just one link is already on the relation (unique)
+                concept.add(Statement("unique", name=", ".join(names_in_set), tag=AUTO))
         for note in [*t.notes, *notes]:
             concept.add(Statement("note", value=note, tag=AUTO))
         for trigger in t.triggers:

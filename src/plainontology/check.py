@@ -11,6 +11,7 @@ from typing import Any
 from uuid import UUID
 
 from .model import DATATYPES, RULE_KINDS, Concept, Ontology, Statement, enum_values, length_bounds, unique_columns
+from .naming import safe_name
 
 
 @dataclass
@@ -300,6 +301,9 @@ def validate_record(onto: Ontology, concept_name: str, record: Any, depth: int =
     if not isinstance(record, dict):
         return [f"{prefix}{concept.name}: a record must be a JSON object"]
     props = {s.name: s for s in onto.all_properties(concept) if not s.is_proposed}
+    # Extraction turns keys like "first name" or "@id" into property names (first_name,
+    # _id); a record may use either form.
+    record = {(k if k in props or safe_name(str(k)) not in props else safe_name(str(k))): v for k, v in record.items()}
     issues = [f"{prefix}{k}: not a property of {concept.name}" for k in record if k not in props]
     for name, s in props.items():
         where = f"{prefix}{name}"

@@ -50,10 +50,17 @@ def _operation_name(op: dict, method: str, route: str) -> str:
 
 
 def _json_schema(content: dict | None) -> dict | None:
-    """The schema of the first JSON-like media type in a content map."""
-    for media, body in (content or {}).items():
-        if "json" in media or media == "*/*":
-            return body.get("schema") if isinstance(body, dict) else None
+    """The schema of a content map: a JSON-like media type first, then forms
+    (multipart/form-data, x-www-form-urlencoded), then any other with a schema."""
+    entries = [(m, b.get("schema")) for m, b in (content or {}).items() if isinstance(b, dict)]
+    for test in (
+        lambda m: "json" in m or m == "*/*",
+        lambda m: m.startswith(("multipart/", "application/x-www-form-urlencoded")),
+        lambda m: True,
+    ):
+        for media, schema in entries:
+            if test(media) and isinstance(schema, dict):
+                return schema
     return None
 
 
@@ -67,6 +74,8 @@ def extract_openapi(path: Path, warnings: list[str] | None = None) -> list[Conce
     swagger = "swagger" in doc
     pointer = "#/definitions/" if swagger else "#/components/schemas/"
     schemas = doc.get("definitions", {}) if swagger else (doc.get("components") or {}).get("schemas", {})
+    for name in schemas or {}:  # reserve every schema's name before any inline object is named
+        walker.ref_name(pointer + name)
     for name in schemas or {}:
         walker.ensure_ref(pointer + name)
 
@@ -142,7 +151,12 @@ def _operation(walker: SchemaWalker, route: str, method: str, op: dict, shared: 
         if "$ref" in body:
             _, resolved = walker.resolve(body["$ref"])
             body = resolved or {}
-        _body(walker, concept, _json_schema(body.get("content")), bool(body.get("required")))
+        schema = _json_schema(body.get("content"))
+        if schema is None and body.get("content"):
+            walker.shared.warnings.append(
+                f"{method.upper()} {route}: the request body has no schema ({', '.join(body['content'])}); skipped"
+            )
+        _body(walker, concept, schema, bool(body.get("required")))
 
     responses = op.get("responses") or {}
     for code in sorted(str(c) for c in responses):

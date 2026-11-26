@@ -95,7 +95,7 @@ class SchemaWalker:
         if target not in self.shared.walkers:
             if not target.exists():
                 return None
-            doc = json.loads(target.read_text(encoding="utf-8-sig"))
+            doc = load_schema_file(target)
             SchemaWalker(doc, target.name, target, self.shared).kind = self.kind
         return self.shared.walkers[target]
 
@@ -169,8 +169,25 @@ class SchemaWalker:
     def ensure_ref(self, ref: str) -> None:
         name = self.ref_name(ref)
         walker, resolved = self.resolve(ref)
-        if name not in self.concepts and walker is not None and resolved is not None and walker.is_object(resolved):
-            walker.object_concept(name, resolved, f"{walker.kind} {walker.label} #{ref.partition('#')[2]}")
+        if name in self.concepts or walker is None or resolved is None:
+            return
+        detail = f"{walker.kind} {walker.label} #{ref.partition('#')[2]}"
+        if walker.is_object(resolved):
+            walker.object_concept(name, resolved, detail)
+            return
+        options = walker.branches(resolved)
+        if options is not None and len(options) > 1 and walker.object_union(options):
+            walker._union("", "", options, False, name=name, detail=f"{detail} (one of)")
+            if desc := _clean(resolved.get("description")):
+                self.concepts[name].add(Statement("definition", value=desc, tag=AUTO))
+
+    def object_union(self, options: list[dict]) -> bool:
+        """True if every option is (or refers to) an object schema."""
+        for o in options:
+            walker, node = self.resolve(o["$ref"]) if "$ref" in o else (self, o)
+            if walker is None or node is None or not walker.is_object(node):
+                return False
+        return True
 
     # shapes -----------------------------------------------------------
     @staticmethod
@@ -264,11 +281,12 @@ class SchemaWalker:
             if "$ref" not in ps:
                 break
             target_walker, resolved = walker.resolve(ps["$ref"])
+            options = target_walker.branches(resolved) if resolved is not None and target_walker else None
             if (
                 target_walker is None
                 or resolved is None
                 or target_walker.is_object(resolved)
-                or target_walker.branches(resolved)
+                or (options is not None and len(options) > 1 and target_walker.object_union(options))
             ):
                 break
             extra = {k: v for k, v in ps.items() if k != "$ref"}
@@ -282,9 +300,9 @@ class SchemaWalker:
 
         def finite(key: str):
             value = ps.get(key)
-            if isinstance(value, bool) or value is None:
-                return value
-            if not isinstance(value, (int, float)) or not math.isfinite(value):
+            if value is None or (isinstance(value, bool) and key.startswith("exclusive")):
+                return value  # draft 4 writes exclusiveMinimum: true
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 notes.append(f"{key} {value} is not a usable number")
                 return None
             return value
@@ -332,7 +350,9 @@ class SchemaWalker:
         out += [Statement("note", value=n, tag=AUTO) for n in notes]
         return out
 
-    def _union(self, owner: str, pname: str, options: list[dict], many: bool) -> tuple[str, str, str]:
+    def _union(
+        self, owner: str, pname: str, options: list[dict], many: bool, name: str = "", detail: str = ""
+    ) -> tuple[str, str, str]:
         enums = [o.get("enum", [o["const"]] if "const" in o else None) for o in options]
         if all(e is not None for e in enums):
             values = list(dict.fromkeys(str(v) for e in enums for v in (e or []) if v is not None))
@@ -342,8 +362,8 @@ class SchemaWalker:
             walker, node = self.resolve(o["$ref"]) if "$ref" in o else (self, o)
             resolved.append((o, walker, node))
         if all(node is not None and walker is not None and walker.is_object(node) for _, walker, node in resolved):
-            name = pascal(f"{owner} {singular(pname) if many else pname}")
-            union = Concept(name, Tag("auto", f"{self.kind} {self.label} {owner}.{pname} (one of)"))
+            name = name or pascal(f"{owner} {singular(pname) if many else pname}")
+            union = Concept(name, Tag("auto", detail or f"{self.kind} {self.label} {owner}.{pname} (one of)"))
             self.concepts.setdefault(name, union)
             members = []
             for i, (o, walker, node) in enumerate(resolved):
@@ -382,9 +402,10 @@ class SchemaWalker:
                 name = pascal(base)
                 detail = f"{self.kind} {self.label} {owner}.{pname}"
                 existing_tag = self.concepts[name].tag if name in self.concepts else None
-                if existing_tag is not None and existing_tag.detail != detail:
+                reserved = name not in self.concepts and name in self.shared.ref_names.values()
+                if reserved or (existing_tag is not None and existing_tag.detail != detail):
                     taken, n = name, 2
-                    while name in self.concepts:
+                    while name in self.concepts or name in self.shared.ref_names.values():
                         name, n = f"{taken}{n}", n + 1
                     self.shared.warnings.append(
                         f"{owner}.{pname}: an object would be concept {taken}, which is taken; it is {name}"
@@ -409,6 +430,27 @@ class SchemaWalker:
         return "has", {"integer": "integer", "number": "decimal", "boolean": "boolean"}.get(str(t), "any"), ""
 
 
+def load_schema_file(path: Path) -> dict:
+    """A referenced schema file: JSON, or YAML for .yaml and .yml (needs PyYAML)."""
+    text = path.read_text(encoding="utf-8-sig")
+    try:
+        if path.suffix.lower() in (".yaml", ".yml"):
+            try:
+                import yaml
+            except ImportError:
+                raise ValueError(f"{path.name}: reading YAML needs PyYAML: pip install pyyaml") from None
+            doc = yaml.safe_load(text)
+        else:
+            doc = json.loads(text)
+    except (ValueError, Exception) as exc:
+        if isinstance(exc, ValueError) and str(exc).startswith(path.name):
+            raise
+        raise ValueError(f"{path.name}: {exc}") from None
+    if not isinstance(doc, dict):
+        raise ValueError(f"{path.name}: expected a JSON or YAML object at the top")
+    return doc
+
+
 def root_name(schema: dict, path: Path | None) -> str:
     stem = path.name if path is not None else "Thing"
     for suffix in (".json", ".schema"):
@@ -424,6 +466,23 @@ def extract_jsonschema(path: Path, warnings: list[str] | None = None) -> list[Co
     if warnings is not None:
         walker.shared.warnings = warnings
     refs = [f"#/{key}/{name}" for key in ("$defs", "definitions") for name in (schema.get(key) or {})]
+    for ref in refs:  # reserve the definitions' names before any inline object is named
+        walker.ref_name(ref)
+    if schema.get("type") == "array" and isinstance(schema.get("items"), dict):
+        # The document is a list: its items are the concept.
+        items = schema["items"]
+        if "$ref" in items and not items.get("properties"):
+            refs.insert(0, items["$ref"])
+        else:
+            concept = walker.object_concept(
+                root_name(schema, path),
+                {**items, "title": schema.get("title") or items.get("title")},
+                f"jsonschema {path.name}",
+            )
+            concept.add(Statement("note", value="the document is a list of these", tag=AUTO))
+        for ref in refs:
+            walker.ensure_ref(ref)
+        return list(walker.concepts.values())
     if "$ref" in schema and not schema.get("properties"):
         # The whole document is one of its definitions (Pydantic writes recursive models so).
         refs.insert(0, schema["$ref"])
