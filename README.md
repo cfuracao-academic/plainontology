@@ -237,6 +237,7 @@ Types: `text integer decimal boolean date datetime binary json any enum(a|b)`. F
 * JSON Schema references to web URLs are not fetched; `plainonto check` flags the missing concept.
 * CHECK constraints more complex than a list, a comparison, a range or a regex are kept as notes, not enforced by `validate`.
 * Field names that are not valid property names (`first name`, `@id`) become `first_name` and `_id`; `validate` accepts either form in a record.
+* Patterns are Python regular expressions. `validate`, pyshacl and LinkML use them as they are; other SHACL engines (XPath regex) may not accept `\b`, look-arounds or `(?i)`.
 * Views are read for their columns and types; the meaning of the query itself is not.
 
 ## Development

@@ -68,7 +68,8 @@ def test_no_renames_flag(tmp_path, capsys):
     capsys.readouterr()
     assert main(["drift", str(f), "--no-renames"]) == 1
     out = capsys.readouterr().out
-    assert "renamed" not in out and "is gone from the sources; kept" in out
+    assert "your lines moved" not in out and "is gone from the sources; kept" in out
+    assert "plainonto rename FILE Book.title headline" in out  # the hint, not an automatic rename
     assert main(["refresh", str(f)]) == 0
     assert "title renamed to headline" in capsys.readouterr().out
     assert load(f).concepts["Book"].prop("headline").children[0].value == "Title"

@@ -312,6 +312,10 @@ class _Reader:
             t.primary_key = []
         elif kind == "fk":
             t.foreign_keys = [fk for fk in t.foreign_keys if fk is not value]
+        elif kind in ("unique", "unique_set") and any(
+            table == t.name and found == (kind, value) for (table, _n), found in self.constraint_names.items()
+        ):
+            return  # another constraint or index still makes it unique
         elif kind == "unique":
             t.unique.discard(value)
         elif kind == "unique_set":
@@ -323,8 +327,7 @@ class _Reader:
         kind_node = item.args.get("kind")
         datatype, many, length = self.datatype(kind_node)
         col = Column(item.name, datatype, many=many, max_length=length)
-        if kind_node is not None and getattr(kind_node.this, "name", "") in _UNSIGNED:  # MySQL unsigned: min 0
-            t.checks.append(f"{exp.column(item.name).sql(self.dialect)} >= 0")
+        col.unsigned = kind_node is not None and getattr(kind_node.this, "name", "") in _UNSIGNED
         base = kind_node.expressions[0] if kind_node is not None and many and kind_node.expressions else kind_node
         if base is not None and getattr(base.this, "name", "") == "USERDEFINED":
             key = base.sql(self.dialect).split(".")[-1].strip('"`').lower()
@@ -571,7 +574,8 @@ class _Reader:
                     t.notes.append(note.replace("WHERE", "where", 1))
                 elif table is not None and cols:
                     t = self.table(self.qual(table))
-                    index_name = index.name or None
+                    # PostgreSQL names an unnamed index table_col1_col2_idx.
+                    index_name = index.name or f"{t.name.split('.')[-1]}_{'_'.join(cols)}_idx"
                     if len(cols) == 1:
                         t.unique.add(cols[0])
                         self.remember(t, index_name, "unique", cols[0])

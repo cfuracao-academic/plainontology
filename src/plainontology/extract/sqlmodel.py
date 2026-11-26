@@ -40,6 +40,7 @@ class Column:
     max_length: int | None = None
     pattern: str = ""
     patterns: list[str] = field(default_factory=list)  # from CHECK constraints (all must match)
+    unsigned: bool = False  # MySQL unsigned: min 0 (goes with the column through CHANGE and MODIFY)
 
 
 @dataclass
@@ -320,6 +321,10 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
     for t in tables:
         link_cols = {c for fk in t.foreign_keys for c in fk.columns}
         rules, notes = _apply_checks(t, label, link_cols)
+        for col in t.columns:
+            if col.unsigned and col.name not in link_cols:
+                r = rules.setdefault(col.name, {})
+                r["min"] = _num(max(Decimal(r["min"]), Decimal(0))) if "min" in r else "0"
         positions = {c.name: i for i, c in enumerate(t.columns)}
         fks = sorted(t.foreign_keys, key=lambda fk: min(positions.get(c, 0) for c in fk.columns))
         fk_cols = {c for fk in fks for c in fk.columns}

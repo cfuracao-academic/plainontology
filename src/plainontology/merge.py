@@ -80,7 +80,8 @@ class Change:
         if self.kind == "concept_kept":
             return f"{sym} concept {self.concept} is gone from the sources; kept because it holds your lines"
         if self.kind == "property_kept":
-            return f"{sym} {self.concept}: {self.line} is gone from the sources; kept because it holds your lines"
+            hint = f"; {self.previous}" if self.previous else ""
+            return f"{sym} {self.concept}: {self.line} is gone from the sources; kept because it holds your lines{hint}"
         if self.kind == "concept_renamed":
             return f"{sym} concept {self.previous} renamed to {self.concept}; your lines moved with it"
         if self.kind == "property_renamed":
@@ -273,7 +274,21 @@ def _merge_lines(
                 kept = copy.deepcopy(s)
                 kept.children = [c for c in kept.children if not c.is_auto]
                 merged.append(kept)
-                report.add("property_kept", where, s.body())
+                maybe = [
+                    a.name
+                    for k, a in fresh.items()
+                    if a.is_property
+                    and k not in old_keys
+                    and a.kind == s.kind
+                    and a.target == (target_map or {}).get(s.target, s.target)
+                ]
+                hint = ""
+                if maybe:
+                    hint = (
+                        f"if it was renamed to {' or '.join(maybe)}, run: "
+                        f"plainonto rename FILE {where}.{s.name} {maybe[0]}"
+                    )
+                report.add("property_kept", where, s.body(), hint)
             else:
                 report.add("removed", where, s.body())
             continue

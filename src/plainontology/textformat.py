@@ -124,6 +124,22 @@ def loads(text: str) -> Ontology:
     pending_gap = 0  # blank lines before the first pending comment
     held: list[Statement] = []  # comments at a property's indentation, before its child lines?
     blanks = 0
+
+    def take_pending() -> list[Statement]:
+        """The column-0 comments waiting for a place, as comment lines."""
+        nonlocal pending, pending_gap
+        out: list[Statement] = []
+        waiting = pending_gap
+        for entry in pending:
+            if not entry:
+                waiting += 1
+                continue
+            comment = parse_statement(entry)
+            comment.col0, comment.blank_before, waiting = True, waiting, 0
+            out.append(comment)
+        pending, pending_gap = [], 0
+        return out
+
     for no, raw in enumerate(text.split("\n"), start=1):
         raw = raw.rstrip("\r")
         if not raw.strip():
@@ -143,12 +159,12 @@ def loads(text: str) -> Ontology:
             except ValueError as exc:
                 raise ParseError(no, str(exc), raw) from None
             statement.raw = typed
-            statement.indent = raw[: len(raw) - len(typed)]
             if statement.kind == "comment":  # a comment keeps its indentation too
                 statement.raw, statement.verbatim = raw, True
             statement.blank_before = gap
             under_prop = last_prop is not None and indent > prop_indent
             if statement.kind == "comment" and last_prop is not None and not under_prop:
+                held.extend(take_pending())  # column-0 comments above it keep their place
                 held.append(statement)  # placed once the next line shows where it belongs
                 continue
             if held:
@@ -159,16 +175,8 @@ def loads(text: str) -> Ontology:
                 held = []
             target = last_prop.children if under_prop and last_prop is not None else current.statements
             if pending:  # column-0 comments inside a concept stay where they are
-                waiting = pending_gap
-                for entry in pending:
-                    if not entry:
-                        waiting += 1
-                        continue
-                    comment = parse_statement(entry)
-                    comment.col0, comment.blank_before, waiting = True, waiting, 0
-                    target.append(comment)
+                target.extend(take_pending())
                 statement.blank_before = gap
-                pending, pending_gap = [], 0
             if under_prop:
                 if statement.kind not in CHILD_KINDS:
                     raise ParseError(
@@ -183,6 +191,12 @@ def loads(text: str) -> Ontology:
                 last_prop, prop_indent = statement, indent
             elif statement.kind != "comment":
                 last_prop = None
+            continue
+        if held and current is not None and line.startswith("#"):
+            # A column-0 comment among held ones: it waits with them, in file order.
+            comment = parse_statement(line)
+            comment.raw, comment.col0, comment.blank_before = typed, True, gap
+            held.append(comment)
             continue
         if held and current is not None:
             current.statements.extend(held)
@@ -256,22 +270,15 @@ def loads(text: str) -> Ontology:
     return onto
 
 
-def _lead(statement: Statement, indent: str, above: str | None = None) -> str:
-    """The indentation to write: a person's own (if it keeps the line under ``above``),
-    otherwise ``indent``. Extracted lines always use ``indent``."""
-    if statement.col0 or (statement.verbatim and not statement.is_auto):
-        return ""
-    own = statement.indent
-    if own and not statement.is_auto and (above is None or _indent(own + "x") > _indent(above + "x")):
-        return own
-    return indent
+def _lead(statement: Statement, indent: str) -> str:
+    """Statement lines are written two spaces per level; comments as typed."""
+    return "" if statement.col0 or (statement.verbatim and not statement.is_auto) else indent
 
 
 def dump_statement(statement: Statement, indent: str = "  ") -> list[str]:
-    lead = _lead(statement, indent)
-    lines = [""] * statement.blank_before + [f"{lead}{statement.text()}"]
+    lines = [""] * statement.blank_before + [f"{_lead(statement, indent)}{statement.text()}"]
     for c in statement.children:
-        lines += [""] * c.blank_before + [f"{_lead(c, lead + '  ', lead)}{c.text()}"]
+        lines += [""] * c.blank_before + [f"{_lead(c, indent + '  ')}{c.text()}"]
     return lines
 
 
@@ -334,15 +341,36 @@ def load(path: str | Path) -> Ontology:
     return loads(Path(path).read_bytes().decode("utf-8"))  # bytes: keep CRLF and a BOM visible
 
 
+def _shape(onto: Ontology) -> list:
+    """Which line sits under which concept and property (comments aside): what a
+    write must never change."""
+    return [
+        (
+            c.name,
+            [
+                (s.kind, s.name, [(ch.kind, ch.name) for ch in s.children if ch.kind != "comment"])
+                for s in c.statements
+                if s.kind != "comment"
+            ],
+        )
+        for c in onto.concepts.values()
+    ]
+
+
 def save(path: str | Path, onto: Ontology) -> None:
     """Write the file, after checking that what is written reads back. A file
     that would not read back is never written."""
     text = dumps(onto)
     try:
-        loads(text)
+        again = loads(text)
     except ParseError as exc:
         raise ValueError(
             f"refusing to write {path}: the result would not read back ({exc}). "
             "This is a bug in PlainOntology; please report it with the source that caused it."
         ) from None
+    if _shape(again) != _shape(onto):
+        raise ValueError(
+            f"refusing to write {path}: a line would read back under a different concept or property. "
+            "This is a bug in PlainOntology; please report it with the source that caused it."
+        )
     Path(path).write_text(text, encoding="utf-8", newline=onto.newline)

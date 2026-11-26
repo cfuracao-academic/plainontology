@@ -167,8 +167,7 @@ def _read(
     t = Table(qualified(schema, name, defaults), kind=kind)
     for col in insp.get_columns(name, schema=schema):
         datatype, many, length, pattern = _datatype(col["type"], engine.dialect, domains)
-        if kind != "view" and getattr(col["type"], "unsigned", False):  # MySQL unsigned: min 0, as in dumps
-            t.checks.append(f"{engine.dialect.identifier_preparer.quote(col['name'])} >= 0")
+        unsigned = kind != "view" and bool(getattr(col["type"], "unsigned", False))  # MySQL: min 0, as in dumps
         if kind != "view" and type(col["type"]).__name__ == "DOMAIN":
             domain_name = str(getattr(col["type"], "name", "") or "").split(".")[-1].strip('"').lower()
             t.checks += [for_column(sql, col["name"], "postgres") for sql in domain_checks.get(domain_name, [])]
@@ -180,6 +179,7 @@ def _read(
                 col["name"], datatype, not col.get("nullable", True), many, col.get("comment") or "", length, pattern
             )
         )
+        t.columns[-1].unsigned = unsigned
     comment = _safe(lambda: insp.get_table_comment(name, schema=schema), {}) or {}
     t.comment = comment.get("text") or ""
     if kind == "view":

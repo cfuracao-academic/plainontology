@@ -70,6 +70,20 @@ def _strings(nodes) -> list[str] | None:
     return out
 
 
+def _without_null_branch(node):
+    """``rule OR col IS NULL`` is the rule for every value (NULL is no value): drop the
+    branch when the rule is about that column only."""
+    node = _strip(node) if isinstance(node, exp.Paren) else node
+    if not isinstance(node, exp.Or):
+        return node
+    for rule, other in ((node.this, node.expression), (node.expression, node.this)):
+        other = _strip(other) if isinstance(other, exp.Paren) else other
+        is_null = isinstance(other, exp.Is) and isinstance(other.expression, exp.Null)
+        if is_null and (col := _column(other.this)) and {c.name for c in rule.find_all(exp.Column)} == {col}:
+            return rule
+    return node
+
+
 def _conjuncts(node) -> list:
     node = _strip(node) if isinstance(node, exp.Paren) else node
     if isinstance(node, exp.And):
@@ -119,8 +133,10 @@ def _part(node) -> list[Finding] | None:
             flag = "(?i)" if iregexp is not None and isinstance(node, iregexp) else ""  # ~* ignores case
             return [Finding("pattern", col, flag + pattern.this)]
         return None
-    if isinstance(node, exp.EQ) and (col := _length_column(node.this)) and (n := _number(node.expression)) is not None:
-        return [Finding("length_min", col, n), Finding("length_max", col, n)]  # char_length(x) = 8
+    if isinstance(node, exp.EQ):  # char_length(x) = 8, or 8 = char_length(x)
+        for side, value in ((node.this, node.expression), (node.expression, node.this)):
+            if (col := _length_column(side)) and (n := _number(value)) is not None:
+                return [Finding("length_min", col, n), Finding("length_max", col, n)]
     if isinstance(node, exp.Between) and (col := _column(node.this)):
         low, high = _number(node.args.get("low")), _number(node.args.get("high"))
         if low is not None and high is not None:
@@ -150,7 +166,7 @@ def analyse(sql: str, dialect: str) -> list[Finding]:
     except Exception:
         return [Finding("note", value=sql)]
     findings: list[Finding] = []
-    for part in _conjuncts(tree):
+    for part in _conjuncts(_without_null_branch(tree)):
         found = _part(part)
         if found is None:
             findings.append(Finding("note", value=_normalise(part).sql(dialect)))

@@ -85,6 +85,11 @@ class SchemaWalker:
             return self
         if re.match(r"^[a-z][a-z0-9+.-]*://", file_part, re.I) or self.path is None:
             return None
+        if file_part.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", file_part):
+            # An absolute path or a network share (//host/share): never followed, so a
+            # schema cannot make PlainOntology contact another machine.
+            self.shared.warnings.append(f"reference {file_part} is not relative to the schema; not followed")
+            return None
         from . import within_root
 
         try:

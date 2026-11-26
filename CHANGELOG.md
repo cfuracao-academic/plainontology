@@ -25,6 +25,18 @@
 - LinkML: mixins for further parents, `unique_keys`, rules, multilingual labels (checked with the LinkML tools in CI)
 - Turtle: language tags, labels on properties, `owl:hasKey`
 
+**Upgrading from 0.1.x**: singular concept names are better (`movies` is `Movie`, not `Movy`; `shelves` is `Shelf`). A concept whose name changes this way is matched by rename detection when it has two or more properties; otherwise the first refresh reports it as removed (or kept, with your lines) and added. Run `plainonto drift` after upgrading and use `plainonto rename FILE Old New` where needed.
+
+**Fixes from a sixth independent review**
+- Writing a file never moves a line under a different concept or property: statement lines are always written two spaces per level, and `save` refuses any write whose structure would read back differently
+- Comments at the start of a line and indented comments keep their order
+- MySQL: `unsigned` (min 0) goes with the column through `CHANGE` and `MODIFY`
+- `DROP INDEX` finds unnamed PostgreSQL indexes by their default name, and keeps a column unique while another constraint still makes it so
+- CHECKs written `rule OR col IS NULL` and reversed comparisons (`8 = char_length(c)`) become rules
+- A property kept because the match was unclear names the possible new names and the `rename` command
+- JSON Schema references to absolute paths or network shares are not followed
+- More singular names: menus, diagnoses, vertices, matrices, shelves, leaves and similar
+
 **Fixes from a fifth independent review**
 - A concept renamed in its source (a retitled Pydantic model) gets its new header; before, the old name stayed and every later `drift` reported the rename again
 - A person's line always wins over an extracted line: only a `[proposed]` line gives way when the sources start producing its key
@@ -35,7 +47,6 @@
 - Singular names: movies, cookies, warehouses, caches, aliases, quizzes and similar come out right; news, canvas and atlas stay as they are
 - MySQL `unsigned` gives `min 0`; `char_length(x) = 8` gives `length 8..8`; `~*` gives a case-insensitive pattern; `citext` is `text`
 - Two OpenAPI sources no longer warn about the shared `Operation` concept; a repeated warning is shown once
-- A person's lines keep their indentation on every write (refresh, rename, agent proposals)
 - The Action only updates a pull request comment it posted itself
 
 **Fixes from a fourth independent review**

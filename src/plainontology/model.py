@@ -170,7 +170,6 @@ class Statement:
     blank_before: int = field(default=0, compare=False)  # blank lines above it in the file
     col0: bool = field(default=False, compare=False)  # a comment written at the start of the line
     verbatim: bool = field(default=False, compare=False)  # a comment written back exactly as typed
-    indent: str = field(default="", compare=False)  # a person's line keeps the indentation it was typed with
 
     @property
     def is_auto(self) -> bool:
