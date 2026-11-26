@@ -22,11 +22,13 @@ Everything else in a dump (SET, data, functions) is skipped. Needs ``sqlglot``.
 
 from __future__ import annotations
 
+import copy
 import logging
 import re
 from pathlib import Path
 from typing import Any
 
+from .sqlcheck import domain_checks, for_column
 from .sqlmodel import Column, ForeignKey, Table, declared_length, enum_type, fold_partition, map_type, qualified
 
 try:
@@ -79,8 +81,6 @@ _DOMAIN = re.compile(
     r"(?:DEFAULT|NOT|NULL|CHECK|CONSTRAINT|COLLATE|;)(.*?);",
     re.I | re.S,
 )
-_DOMAIN_IN = re.compile(r"VALUE\s+IN\s*\(([^)]*)\)", re.I)
-_DOMAIN_REGEX = re.compile(r"VALUE\)?(?:::\w+)?\s*~\s*'((?:[^']|'')*)'", re.I)
 _TRIGGER = re.compile(
     rf"CREATE\s+(?:OR\s+REPLACE\s+)?(?:DEFINER\s*=\s*\S+\s+)?(?:CONSTRAINT\s+)?TRIGGER\s+{_IDENT}\s+"
     rf"(BEFORE|AFTER|INSTEAD\s+OF)\s+(.+?)\s+ON\s+(?:ONLY\s+)?(?:{_IDENT}\.)?{_IDENT}",
@@ -159,21 +159,19 @@ def _columns(node) -> list[str]:
     return [i.name for i in items if i.name]
 
 
-def _strip_quotes(text: str) -> list[str]:
-    return [v.strip().strip("'\"") for v in text.split(",") if v.strip()]
-
-
 class _Reader:
     def __init__(self, dialect: str):
         self.dialect = dialect
         self.defaults = DEFAULT_SCHEMAS.get(dialect, ())
         self.enums: dict[str, list[str]] = {}
-        self.domains: dict[str, tuple[str, list[str] | None, str]] = {}
+        self.domains: dict[str, tuple[str, list[str], bool]] = {}  # name -> (type, checks, not null)
         self.composites: set[str] = set()
         self.tables: dict[str, Table] = {}
         self.views: list[tuple[str, Any]] = []
+        self.selected_tables: set[str] = set()  # CREATE TABLE ... AS SELECT: read like a view
         self.table_comments: dict[str, str] = {}
         self.constraint_names: dict[tuple[str, str], tuple[str, object]] = {}
+        self.check_count: dict[str, int] = {}
         self.warnings: list[str] = []
         self.partition_of: dict[str, str] = {}  # partition -> parent table
         self.partition_keys: dict[str, str] = {}  # parent -> "RANGE (day)"
@@ -206,9 +204,9 @@ class _Reader:
             key = kind.sql(self.dialect).split(".")[-1].strip('"`').lower()
             if key in self.enums:
                 return enum_type(self.enums[key]), False, None
-            if key in self.domains:
-                base, values, _pattern = self.domains[key]
-                return (enum_type(values) if values else map_type(base)), False, declared_length(base)
+            if key in self.domains:  # its checks are added to the column (see column())
+                base = self.domains[key][0]
+                return map_type(base), False, declared_length(base)
             if key in self.composites:
                 return "json", False, None
             return "any", False, None
@@ -266,9 +264,7 @@ class _Reader:
                 t.unique_sets.append(cols)
                 self.remember(t, key_name or f"{bare}_{'_'.join(cols)}_key", "unique_set", cols)
         elif isinstance(node, exp.CheckColumnConstraint) and node.this is not None:
-            sql = node.this.sql(self.dialect)
-            t.checks.append(sql)
-            self.remember(t, name, "check", sql)
+            self.add_check(t, node.this, name)
 
     def drop_constraint(self, t: Table, name: str) -> None:
         found = self.constraint_names.pop((t.name, name.lower()), None)
@@ -297,26 +293,59 @@ class _Reader:
         if kind_node is not None and getattr(kind_node.this, "name", "") == "USERDEFINED":
             domain = self.domains.get(kind_node.sql(self.dialect).split(".")[-1].strip('"`').lower())
             if domain:
-                col.pattern = domain[2]
+                t.checks += [for_column(sql, item.name, self.dialect) for sql in domain[1]]
+                col.not_null = col.not_null or domain[2]
+        bare = t.name.split(".")[-1]
         for c in item.args.get("constraints") or []:
             kind = c.args.get("kind")
+            own = c.this.name if isinstance(c.this, exp.Identifier) else None
             if isinstance(kind, exp.NotNullColumnConstraint) and not kind.args.get("allow_null"):
                 col.not_null = True
             elif isinstance(kind, exp.PrimaryKeyColumnConstraint):
                 t.primary_key = [item.name]
-                self.remember(t, f"{t.name.split('.')[-1]}_pkey", "pk", None)
+                self.remember(t, own or f"{bare}_pkey", "pk", None)
             elif isinstance(kind, exp.UniqueColumnConstraint):
                 t.unique.add(item.name)
-                self.remember(t, f"{t.name.split('.')[-1]}_{item.name}_key", "unique", item.name)
+                self.remember(t, own or f"{bare}_{item.name}_key", "unique", item.name)
             elif isinstance(kind, exp.Reference) and kind.this is not None:
                 fk = ForeignKey([item.name], self.qual(kind.this))
                 t.foreign_keys.append(fk)
-                self.remember(t, f"{t.name.split('.')[-1]}_{item.name}_fkey", "fk", fk)
+                self.remember(t, own or f"{bare}_{item.name}_fkey", "fk", fk)
             elif isinstance(kind, exp.CommentColumnConstraint) and kind.this is not None:
                 col.comment = kind.this.name
             elif isinstance(kind, exp.CheckColumnConstraint) and kind.this is not None:
-                t.checks.append(kind.this.sql(self.dialect))
+                self.add_check(t, kind.this, own, item.name)
         return col
+
+    def add_check(self, t: Table, node, name: str | None, column: str | None = None) -> None:
+        """Keep a CHECK and its name: the given one, or the database's default
+        (PostgreSQL: table_column_check; MySQL: table_chk_1, table_chk_2 ...)."""
+        sql = node.sql(self.dialect)
+        t.checks.append(sql)
+        bare = t.name.split(".")[-1]
+        self.check_count[t.name] = self.check_count.get(t.name, 0) + 1
+        if not name and self.dialect == "mysql":
+            name = f"{bare}_chk_{self.check_count[t.name]}"
+        elif not name:
+            first = column or next((c.name for c in node.find_all(exp.Column)), "")
+            name = f"{bare}_{first}_check" if first else f"{bare}_check"
+        self.remember(t, name, "check", sql)
+
+    def _check_columns(self, sql: str) -> set[str]:
+        try:
+            return {c.name for c in sqlglot.parse_one(sql, read=self.dialect).find_all(exp.Column)}
+        except SqlglotError:
+            return set()
+
+    def _rename_in_check(self, sql: str, old: str, new: str) -> str:
+        try:
+            tree = sqlglot.parse_one(sql, read=self.dialect)
+        except SqlglotError:
+            return sql
+        for c in tree.find_all(exp.Column):
+            if c.name == old:
+                c.set("this", exp.to_identifier(new))
+        return tree.sql(self.dialect)
 
     def put_column(self, t: Table, col: Column, replace: str | None = None) -> None:
         """Add a column, or replace the column named ``replace`` (default: the same name)."""
@@ -340,6 +369,12 @@ class _Reader:
             fk.columns = swap(fk.columns)
         t.unique = {new if c == old else c for c in t.unique}
         t.unique_sets = [swap(u) for u in t.unique_sets]
+        # A CHECK follows the column, as the database rewrites it.
+        renamed = {sql: self._rename_in_check(sql, old, new) for sql in t.checks if old in self._check_columns(sql)}
+        t.checks = [renamed.get(sql, sql) for sql in t.checks]
+        for key, (kind, value) in list(self.constraint_names.items()):
+            if key[0] == t.name and kind == "check" and value in renamed:
+                self.constraint_names[key] = (kind, renamed[value])
 
     def drop_column(self, t: Table, name: str) -> None:
         t.columns = [c for c in t.columns if c.name != name]
@@ -347,6 +382,7 @@ class _Reader:
         t.foreign_keys = [fk for fk in t.foreign_keys if name not in fk.columns]
         t.unique.discard(name)
         t.unique_sets = [u for u in t.unique_sets if name not in u]
+        t.checks = [sql for sql in t.checks if name not in self._check_columns(sql)]  # dropped with the column
 
     def rename_table(self, old: str, new: str) -> None:
         if old not in self.tables:
@@ -379,6 +415,7 @@ class _Reader:
                     self.drop_column(t, target.name)
             elif isinstance(action, exp.Drop) and (action.args.get("kind") or "").upper() in (
                 "CONSTRAINT",
+                "CHECK",
                 "FOREIGN KEY",
                 "INDEX",
                 "KEY",
@@ -424,20 +461,52 @@ class _Reader:
             self.tables[name] = Table(name)
         t = self.table(name)
         for item in schema.expressions:
-            if not isinstance(item, exp.ColumnDef):
+            if isinstance(item, exp.LikeProperty):
+                self.like(t, item)
+            elif not isinstance(item, exp.ColumnDef):
                 self.constraint(t, item)
-                continue
-            t.columns.append(self.column(t, item))
+            else:
+                t.columns.append(self.column(t, item))
         properties = node.args.get("properties")
         for prop in properties.expressions if properties else []:
             if isinstance(prop, exp.SchemaCommentProperty) and prop.this is not None:
                 t.comment = prop.this.name
+            elif isinstance(prop, exp.InheritsProperty):
+                t.inherits += [self.qual(parent) for parent in prop.expressions]
+
+    def like(self, t: Table, node) -> None:
+        """CREATE TABLE t (LIKE other INCLUDING ...): copy the other table's columns
+        (with NOT NULL, as PostgreSQL does) and, when included, its keys and checks."""
+        source = self.tables.get(self.qual(node.this))
+        if source is None or not source.columns:
+            self.warnings.append(f"{t.name}: LIKE {self.qual(node.this)} names a table not in the file; skipped")
+            return
+        options = {
+            str(p.args.get("value").name if p.args.get("value") is not None else "").upper()
+            for p in node.expressions
+            if str(p.name).upper() == "INCLUDING"
+        }
+        for c in source.columns:
+            if t.column(c.name) is None:
+                t.columns.append(copied := copy.deepcopy(c))
+                copied.not_null = c.not_null or c.name in source.primary_key
+        if options & {"ALL", "INDEXES"}:
+            t.primary_key = t.primary_key or list(source.primary_key)
+            t.unique |= source.unique
+            t.unique_sets += [list(u) for u in source.unique_sets]
+        if options & {"ALL", "CONSTRAINTS"}:
+            t.checks += list(source.checks)
+        t.notes.append(f"columns copied from {source.name.split('.')[-1]} (LIKE)")
 
     def statement(self, node) -> None:
         if isinstance(node, exp.Create):
             kind = (node.args.get("kind") or "").upper()
             if kind == "TABLE" and isinstance(node.this, exp.Schema):
                 self.create_table(node)
+            elif kind == "TABLE" and node.args.get("expression") is not None:  # CREATE TABLE ... AS SELECT
+                name = self.qual(node.this)
+                self.views.append((name, node.args["expression"]))
+                self.selected_tables.add(name)
             elif kind == "TYPE":
                 expression = node.args.get("expression")
                 name = self.qual(node.this).split(".")[-1].lower()
@@ -526,13 +595,9 @@ class _Reader:
     # file --------------------------------------------------------------
     def prescan(self, sql: str) -> None:
         for m in _DOMAIN.finditer(sql):
-            values = _DOMAIN_IN.search(m[4] or "")
-            regex = _DOMAIN_REGEX.search(m[4] or "")
-            self.domains[m[2].lower()] = (
-                m[3].strip(),
-                _strip_quotes(values[1]) if values else None,
-                regex[1].replace("''", "'") if regex else "",
-            )
+            rest = m.group(0)[m.end(3) - m.start(0) :]
+            not_null = re.search(r"\bNOT\s+NULL\b", re.sub(r"'(?:[^']|'')*'", "''", rest), re.I) is not None
+            self.domains[m[2].lower()] = (m[3].strip(), domain_checks(rest), not_null)
 
     def triggers(self, sql: str) -> None:
         seen = set()
@@ -662,6 +727,9 @@ class _Reader:
             self.statement(node)
         for name, query in self.views:
             self.tables[name] = self.resolve_view(name, query)
+            if name in self.selected_tables:
+                self.tables[name].kind = "table"
+                self.tables[name].notes.append("created from a query (CREATE TABLE ... AS)")
         self.apply_comments()
         self.triggers(sql)
         self.fold_partitions()

@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 
+from .sqlcheck import for_column
 from .sqlmodel import Column, ForeignKey, Table, declared_length, enum_type, fold_partition, map_type, qualified
 
 _DRIVERS = {
@@ -100,15 +101,7 @@ def _datatype(sqltype, dialect, domains: dict[str, str] | None = None) -> tuple[
         declared = (domains or {}).get(domain_name)
         if length is None and declared:
             length = declared_length(declared)
-        if getattr(sqltype, "check", None) is not None:
-            from .sqlcheck import analyse
-
-            for f in analyse(str(sqltype.check), "postgres"):
-                if f.column.upper() == "VALUE" and f.kind == "pattern":
-                    pattern = str(f.value)
-                elif f.column.upper() == "VALUE" and f.kind == "enum" and datatype in ("text", "any"):
-                    datatype = enum_type(f.value)
-        return datatype, many, length, pattern
+        return datatype, many, length, pattern  # the domain's checks are added to the column (see _read)
     if isinstance(sqltype, sa.Boolean):
         return "boolean", False, None, ""
     if isinstance(sqltype, sa.types.NullType):
@@ -159,12 +152,24 @@ def _triggers(conn, dialect_name: str, schema: str | None) -> dict[str, list[str
 
 
 def _read(
-    insp, conn, engine, name: str, schema: str | None, default: str | None, kind: str, triggers, domains: dict[str, str]
+    insp,
+    conn,
+    engine,
+    name: str,
+    schema: str | None,
+    default: str | None,
+    kind: str,
+    triggers,
+    domains: dict[str, str],
+    domain_checks: dict[str, list[str]],
 ) -> Table:
     defaults = (default.lower(),) if default else ()
     t = Table(qualified(schema, name, defaults), kind=kind)
     for col in insp.get_columns(name, schema=schema):
         datatype, many, length, pattern = _datatype(col["type"], engine.dialect, domains)
+        if kind != "view" and type(col["type"]).__name__ == "DOMAIN":
+            domain_name = str(getattr(col["type"], "name", "") or "").split(".")[-1].strip('"').lower()
+            t.checks += [for_column(sql, col["name"], "postgres") for sql in domain_checks.get(domain_name, [])]
         if kind == "view":  # views report types and lengths only, as the dump reader does
             t.columns.append(Column(col["name"], datatype, False, many, "", length))
             continue
@@ -214,8 +219,11 @@ def tables_from_database(url: str) -> list[Table]:
         insp = sa.inspect(engine)
         default = insp.default_schema_name
         domains: dict[str, str] = {}
+        domain_checks: dict[str, list[str]] = {}
         partition_of: dict[str, str] = {}  # partition -> parent (PostgreSQL)
         partition_keys: dict[str, str] = {}
+        inherits: dict[str, list[str]] = {}  # table -> parents (PostgreSQL INHERITS)
+        inherited: dict[str, set[str]] = {}  # table -> columns it only inherits
         if engine.dialect.name == "postgresql":
             schemas: list[str | None] = [s for s in insp.get_schema_names() if not _PG_SYSTEM.match(s)]
             schemas.sort(key=lambda s: (s != default, s))
@@ -227,6 +235,8 @@ def tables_from_database(url: str) -> list[Table]:
                     )
                 )
                 domains = {str(name).lower(): str(declared) for name, declared in rows}
+                for d in _safe(lambda: insp.get_domains(schema="*"), []):  # type: ignore[attr-defined]
+                    domain_checks[str(d["name"]).lower()] = [str(c["check"]) for c in d.get("constraints") or []]
                 partitions = conn.execute(
                     sa.text(
                         "SELECT cn.nspname, c.relname, pn.nspname, p.relname, pg_get_partkeydef(p.oid) "
@@ -238,11 +248,35 @@ def tables_from_database(url: str) -> list[Table]:
                         "WHERE c.relispartition"
                     )
                 )
+                defaults = (default.lower(),) if default else ()
                 for c_schema, child, p_schema, parent, key in partitions:
-                    defaults = (default.lower(),) if default else ()
                     partition_of[qualified(c_schema, child, defaults)] = qualified(p_schema, parent, defaults)
                     if key:
                         partition_keys[qualified(p_schema, parent, defaults)] = " ".join(str(key).split())
+                parents = conn.execute(
+                    sa.text(
+                        "SELECT cn.nspname, c.relname, pn.nspname, p.relname "
+                        "FROM pg_catalog.pg_inherits i "
+                        "JOIN pg_catalog.pg_class c ON c.oid = i.inhrelid "
+                        "JOIN pg_catalog.pg_namespace cn ON cn.oid = c.relnamespace "
+                        "JOIN pg_catalog.pg_class p ON p.oid = i.inhparent "
+                        "JOIN pg_catalog.pg_namespace pn ON pn.oid = p.relnamespace "
+                        "WHERE NOT c.relispartition ORDER BY i.inhseqno"
+                    )
+                )
+                for c_schema, child, p_schema, parent in parents:
+                    child_name = qualified(c_schema, child, defaults)
+                    inherits.setdefault(child_name, []).append(qualified(p_schema, parent, defaults))
+                columns = conn.execute(
+                    sa.text(
+                        "SELECT n.nspname, c.relname, a.attname FROM pg_catalog.pg_attribute a "
+                        "JOIN pg_catalog.pg_class c ON c.oid = a.attrelid "
+                        "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+                        "WHERE NOT a.attislocal AND a.attnum > 0 AND NOT a.attisdropped AND NOT c.relispartition"
+                    )
+                )
+                for c_schema, child, column in columns:
+                    inherited.setdefault(qualified(c_schema, child, defaults), set()).add(column)
         else:
             schemas = [None]  # MySQL and SQLite: the connected database only
         tables: list[Table] = []
@@ -251,10 +285,21 @@ def tables_from_database(url: str) -> list[Table]:
             for schema in schemas:
                 triggers = _safe(lambda s=schema: _triggers(conn, dialect_name, s), {})
                 for name in insp.get_table_names(schema=schema):
-                    tables.append(_read(insp, conn, engine, name, schema, default, "table", triggers, domains))
+                    tables.append(
+                        _read(insp, conn, engine, name, schema, default, "table", triggers, domains, domain_checks)
+                    )
                 for name in _safe(lambda s=schema: insp.get_view_names(schema=s), []):
-                    tables.append(_read(insp, conn, engine, name, schema, default, "view", triggers, domains))
+                    tables.append(
+                        _read(insp, conn, engine, name, schema, default, "view", triggers, domains, domain_checks)
+                    )
         by_name = {t.name: t for t in tables}
+        for name, parents_of in inherits.items():
+            if name in by_name:  # the child lists only its own columns, as in a dump
+                t = by_name[name]
+                gone = inherited.get(name, set())
+                t.inherits = parents_of
+                t.columns = [c for c in t.columns if c.name not in gone]
+                t.checks = [c for c in t.checks if not any(re.search(rf"\b{re.escape(g)}\b", c) for g in gone)]
         counts: dict[str, int] = {}
         roots: dict[str, str] = {}
         for child in partition_of:

@@ -213,12 +213,12 @@ class SchemaWalker:
                 self.ensure_ref(part["$ref"])
                 concept.add(Statement("is_a", name=self.ref_name(part["$ref"]), tag=AUTO))
             else:
-                self._properties(concept, part)
+                self._properties(concept, part, set(schema.get("required", []) or []))
         self._properties(concept, schema)
         return concept
 
-    def _properties(self, concept: Concept, schema: dict) -> None:
-        required = set(schema.get("required", []) or [])
+    def _properties(self, concept: Concept, schema: dict, outer_required: set | None = None) -> None:
+        required = set(schema.get("required", []) or []) | (outer_required or set())
         for pname, ps in (schema.get("properties") or {}).items():
             ps = ps if isinstance(ps, dict) else {}
             line = self._property(concept.name, pname, ps, pname in required)
@@ -423,8 +423,25 @@ def extract_jsonschema(path: Path, warnings: list[str] | None = None) -> list[Co
     walker = SchemaWalker(schema, path.name, path)
     if warnings is not None:
         walker.shared.warnings = warnings
-    walker.object_concept(root_name(schema, path), schema, f"jsonschema {path.name}")
-    for key in ("$defs", "definitions"):
-        for name in schema.get(key, {}) or {}:
-            walker.ensure_ref(f"#/{key}/{name}")
+    refs = [f"#/{key}/{name}" for key in ("$defs", "definitions") for name in (schema.get(key) or {})]
+    if "$ref" in schema and not schema.get("properties"):
+        # The whole document is one of its definitions (Pydantic writes recursive models so).
+        refs.insert(0, schema["$ref"])
+    else:
+        root = schema
+        if "$ref" in schema:  # a reference beside properties of its own: the root extends it
+            root = {k: v for k, v in schema.items() if k != "$ref"}
+            root["allOf"] = [{"$ref": schema["$ref"]}, *(schema.get("allOf") or [])]
+        name = wanted = root_name(schema, path)
+        taken = {walker.ref_name(r) for r in refs}
+        n = 2
+        while name in taken:
+            name, n = f"{wanted}Document" if n == 2 else f"{wanted}Document{n - 1}", n + 1
+        if name != wanted:
+            walker.shared.warnings.append(
+                f"{path.name}: the document would be concept {wanted}, like one of its definitions; it is {name}"
+            )
+        walker.object_concept(name, root, f"jsonschema {path.name}")
+    for ref in refs:
+        walker.ensure_ref(ref)
     return list(walker.concepts.values())

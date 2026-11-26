@@ -60,6 +60,7 @@ class Table:
     checks: list[str] = field(default_factory=list)  # CHECK expressions as SQL text
     triggers: list[str] = field(default_factory=list)  # e.g. "touch: BEFORE INSERT, UPDATE"
     notes: list[str] = field(default_factory=list)  # e.g. "partitioned by RANGE (day) into 12 tables"
+    inherits: list[str] = field(default_factory=list)  # PostgreSQL INHERITS (parent tables)
 
     def column(self, name: str) -> Column | None:
         return next((c for c in self.columns if c.name == name), None)
@@ -278,7 +279,9 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
         fks = sorted(t.foreign_keys, key=lambda fk: min(positions.get(c, 0) for c in fk.columns))
         fk_cols = {c for fk in fks for c in fk.columns}
         names = {c.name for c in t.columns}
-        two_links = len(fks) == 2 and all(len(fk.columns) == 1 for fk in fks)
+        # A join table links two tables of the file; a link to a table that is not
+        # there keeps the join table as a concept of its own.
+        two_links = len(fks) == 2 and all(len(fk.columns) == 1 for fk in fks) and all(fk.table in by_name for fk in fks)
         keyed_by_links = set(t.primary_key) == fk_cols or any(set(u) == fk_cols for u in t.unique_sets)
         if two_links and names == fk_cols:
             join_links.append((t, fks[0], fks[1]))
@@ -292,6 +295,8 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
             concept.add(Statement("definition", value=t.comment, tag=AUTO))
         if t.kind == "view":
             concept.add(Statement("note", value="database view (read-only)", tag=AUTO))
+        for parent in t.inherits:
+            concept.add(Statement("is_a", name=cnames.get(parent, concept_name(parent)), tag=AUTO))
         single_key = len(t.primary_key) == 1
         prop_name: dict[str, str] = {}
         used: set[str] = set()
@@ -360,17 +365,19 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
 
     for t, owner, other in join_links:
         source = concepts.get(owner.table)
-        if source is None or other.table not in by_name:
+        if source is None:
             continue
-        name = plural(relation_name(other.columns[0]))
-        source.add(
+        source.add_property(
             Statement(
                 "rel",
-                name=name,
+                name=plural(relation_name(other.columns[0])),
                 target=cnames.get(other.table, concept_name(other.table)),
                 flags=("many",),
                 tag=Tag("auto", f"via {t.name}"),
-            )
+            ),
+            warnings,
+            f"join table {t.name}",
+            safe_name(t.name),
         )
 
     return list(concepts.values())

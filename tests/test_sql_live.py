@@ -67,3 +67,29 @@ def test_mysql_live_matches_dump():
     live = _lines(extract(f"mysql:env:{var}", EXAMPLES))
     dump = _lines(extract("mysql:library.mysql.sql", EXAMPLES))
     assert live == dump
+
+
+INHERITANCE = """\
+CREATE TABLE public.items (
+    id integer PRIMARY KEY,
+    code text NOT NULL CHECK (char_length(code) <= 5)
+);
+CREATE TABLE public.ebooks (
+    file_url text NOT NULL
+) INHERITS (public.items);
+CREATE TABLE public.item_copy (LIKE public.items INCLUDING ALL);
+"""
+
+
+@pytest.mark.skipif(not os.environ.get("PLAINONTO_TEST_POSTGRES_URL"), reason="no PostgreSQL server")
+def test_postgres_inheritance_live_matches_dump(tmp_path):
+    var = "PLAINONTO_TEST_POSTGRES_URL"
+    reset = ["DROP SCHEMA IF EXISTS archive CASCADE", "DROP SCHEMA IF EXISTS public CASCADE", "CREATE SCHEMA public"]
+    _load(os.environ[var], INHERITANCE, split=False, reset=reset)
+    (tmp_path / "inh.sql").write_text(INHERITANCE, encoding="utf-8")
+    live = _lines(extract(f"postgres:env:{var}", tmp_path))
+    dump = _lines(extract("postgres:inh.sql", tmp_path))
+    assert "is_a Item [auto]" in dump["Ebook"]
+    # LIKE leaves a note in the dump that a live database cannot know about
+    dump["ItemCopy"] = [line for line in dump["ItemCopy"] if "(LIKE)" not in line]
+    assert live == dump

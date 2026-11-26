@@ -130,7 +130,12 @@ def _operation(walker: SchemaWalker, route: str, method: str, op: dict, shared: 
         }
         if p.get("description") and "description" not in schema:
             schema = {**schema, "description": p["description"]}
-        concept.add(walker._property(name, pname, schema, bool(p.get("required")) or p.get("in") == "path"))
+        concept.add_property(
+            walker._property(name, pname, schema, bool(p.get("required")) or p.get("in") == "path"),
+            walker.shared.warnings,
+            f"{method.upper()} {route}: {_where} parameter {pname}",
+            safe_name(f"{_where}_{pname}"),
+        )
 
     if not swagger:
         body = op.get("requestBody") or {}
@@ -153,7 +158,7 @@ def _operation(walker: SchemaWalker, route: str, method: str, op: dict, shared: 
         if returned:
             line = walker._property(name, "returns", returned, False)
             line.value = line.value or _clean(response.get("description"))
-            concept.add(line)
+            concept.add_property(line, walker.shared.warnings, f"{method.upper()} {route}: response", "response")
         break
 
 
@@ -162,14 +167,22 @@ def _body(walker: SchemaWalker, concept: Concept, schema: dict | None, required:
         return
     composed = any(k in schema for k in ("oneOf", "anyOf", "allOf"))
     if "$ref" in schema or schema.get("type") == "array" or composed or not schema.get("properties"):
-        concept.add(walker._property(concept.name, "body", schema, required))
+        concept.add_property(
+            walker._property(concept.name, "body", schema, required),
+            walker.shared.warnings,
+            f"{concept.name}: request body",
+            "request_body",
+        )
         return
     for pname, ps in (schema.get("properties") or {}).items():
-        concept.add(
+        concept.add_property(
             walker._property(
                 concept.name,
                 safe_name(pname),
                 ps if isinstance(ps, dict) else {},
                 pname in set(schema.get("required") or []),
-            )
+            ),
+            walker.shared.warnings,
+            f"{concept.name}: body property {pname}",
+            safe_name(f"body_{pname}"),
         )

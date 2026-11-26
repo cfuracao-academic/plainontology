@@ -51,12 +51,22 @@ def extract_tools(path: Path, warnings: list[str] | None = None) -> list[Concept
             ],
         )
     }
+    owners: dict[str, str] = {"Tool": "the built-in Tool concept"}
     for name, description, params in iter_tools(doc):
         walker = SchemaWalker(params, path.name)
         schema = {**params, "description": description or params.get("description", "")}
         schema.pop("title", None)
-        concept = walker.object_concept(pascal(name), schema, f"tools {path.name} {name}")
+        cname = base = pascal(name)
+        n = 2
+        while cname in concepts:
+            cname, n = f"{base}{n}", n + 1
+        if cname != base and warnings is not None:
+            warnings.append(f"tool {name} would be concept {base}, which {owners[base]} has; it is {cname}")
+        concept = walker.object_concept(cname, schema, f"tools {path.name} {name}")
         concept.statements.insert(0, Statement("is_a", name="Tool", tag=AUTO))
-        for cname, c in walker.concepts.items():
-            concepts.setdefault(cname, c)
+        for other, c in walker.concepts.items():
+            if other not in concepts:
+                concepts[other], owners[other] = c, f"tool {name}"
+            elif concepts[other] is not c and warnings is not None:
+                warnings.append(f"tool {name}: concept {other} is also defined by {owners[other]}; the first is kept")
     return list(concepts.values())

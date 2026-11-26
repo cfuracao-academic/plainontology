@@ -153,3 +153,40 @@ def analyse(sql: str, dialect: str) -> list[Finding]:
         else:
             findings.extend(found)
     return findings
+
+
+def for_column(sql: str, column: str, dialect: str) -> str:
+    """A domain CHECK (written with VALUE) as a CHECK on ``column``."""
+    import re
+
+    import sqlglot
+    from sqlglot import exp
+
+    try:
+        tree = sqlglot.parse_one(sql, read=dialect)
+    except sqlglot.errors.SqlglotError:
+        return re.sub(r"\bVALUE\b", column, sql, flags=re.I)
+    for c in list(tree.find_all(exp.Column)):
+        if c.name.upper() == "VALUE" and not c.table:
+            c.set("this", exp.to_identifier(column))
+    return tree.sql(dialect)
+
+
+def domain_checks(text: str) -> list[str]:
+    """The CHECK (...) expressions in the text after CREATE DOMAIN name AS type."""
+    import re
+
+    found = []
+    for m in re.finditer(r"\bCHECK\s*\(", text, re.I):
+        depth, i, quoted = 1, m.end(), False
+        while i < len(text) and depth:
+            ch = text[i]
+            if ch == "'":
+                quoted = not quoted
+            elif not quoted:
+                depth += ch == "("
+                depth -= ch == ")"
+            i += 1
+        if depth == 0:
+            found.append(text[m.end() : i - 1].strip())
+    return found

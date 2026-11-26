@@ -17,6 +17,7 @@ Run ``dbt parse`` (or any dbt command) first; it writes the manifest.
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -49,8 +50,10 @@ class _Column:
 def _num(value: Any) -> str | None:
     """A numeric bound as text, or None for dates and other non-numbers."""
     try:
-        float(str(value).strip("'\""))
+        number = float(str(value).strip("'\""))
     except ValueError:
+        return None
+    if not math.isfinite(number):
         return None
     return number_text(str(value).strip("'\""))
 
@@ -66,7 +69,10 @@ def _ref_target(text: str, names: dict[str, str]) -> str | None:
 
 def extract_dbt(path: Path, warnings: list[str] | None = None) -> list[Concept]:
     if path.is_dir():
+        from . import within_root
+
         path = path / "target" / "manifest.json" if (path / "target").is_dir() else path / "manifest.json"
+        within_root(path)  # target/ could be a link to somewhere else
     manifest = json.loads(path.read_text(encoding="utf-8-sig"))
     nodes: dict[str, dict] = manifest.get("nodes") or {}
     sources: dict[str, dict] = manifest.get("sources") or {}
@@ -192,7 +198,7 @@ def extract_dbt(path: Path, warnings: list[str] | None = None) -> list[Concept]:
                             word = "more than" if kind == "min" else "less than"
                         line.children.append(Statement("note", value=f"{word} {bound}", tag=AUTO))
             line.children += [Statement("note", value=text, tag=AUTO) for text in c.notes]
-            concept.add(line)
+            concept.add_property(line, warnings, f"dbt {where}: column {c.name}", safe_name(c.name))
         parents = [by_id[d] for d in (node.get("depends_on") or {}).get("nodes", []) if d in by_id]
         if parents:
             concept.add(Statement("note", value="built from: " + ", ".join(dict.fromkeys(parents)), tag=AUTO))

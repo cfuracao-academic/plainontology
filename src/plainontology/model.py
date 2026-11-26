@@ -87,6 +87,8 @@ def number_text(value: object) -> str:
         d = Decimal(str(value))
     except InvalidOperation:
         return str(value)
+    if not d.is_finite():
+        return str(value)
     if d == d.to_integral_value():
         return str(int(d))
     return format(d.normalize(), "f")
@@ -276,6 +278,24 @@ class Concept:
             return False
         self.statements.append(statement)
         return True
+
+    def add_property(self, statement: Statement, warnings: list[str] | None, what: str, fallback: str = "") -> str:
+        """Add a property line; if its name is taken, use ``fallback`` (or the name
+        with _2, _3 ...) and say so in ``warnings``, so no extracted line is lost.
+        Returns the name used."""
+        if self.add(statement):
+            return statement.name
+        wanted = statement.name
+        base = fallback if fallback and fallback != wanted else f"{wanted}_2"
+        name, n = base, 2
+        while self.prop(name) is not None:
+            n += 1
+            name = f"{fallback}_{n}" if fallback and fallback != wanted else f"{wanted}_{n}"
+        statement.name = name
+        self.statements.append(statement)
+        if warnings is not None:
+            warnings.append(f"{what} would be property {wanted} of {self.name}, which is taken; it is {name}")
+        return name
 
 
 @dataclass

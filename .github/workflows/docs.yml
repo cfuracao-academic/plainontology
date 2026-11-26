@@ -1,9 +1,7 @@
 name: Docs
 
-# Builds the documentation site on every push and pull request. Publishing to
-# GitHub Pages runs by hand (Actions tab, "Run workflow") until Pages is
-# switched on in the repository settings with "GitHub Actions" as the source;
-# then the push trigger below can publish every change to main.
+# Builds the documentation site on every push and pull request, and publishes
+# it to GitHub Pages on every push to main (or by hand: Actions tab, "Run workflow").
 
 on:
   push:
@@ -19,6 +17,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -32,13 +34,13 @@ jobs:
         env:
           NO_MKDOCS_2_WARNING: "1"
       - uses: actions/upload-pages-artifact@v3
-        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish)
         with:
           path: site
 
   publish:
     needs: build
-    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
     permissions:
       pages: write
