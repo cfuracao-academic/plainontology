@@ -11,8 +11,16 @@ def words(text: str) -> list[str]:
     return _WORD_RE.findall(text)
 
 
+_IRREGULAR = {"people": "person", "children": "child", "men": "man", "women": "woman", "mice": "mouse",
+              "geese": "goose", "feet": "foot", "teeth": "tooth", "indices": "index", "criteria": "criterion",
+              "analyses": "analysis", "statuses": "status", "series": "series", "species": "species"}
+
+
 def singular(word: str) -> str:
     lw = word.lower()
+    if lw in _IRREGULAR:
+        single = _IRREGULAR[lw]
+        return single.capitalize() if word[:1].isupper() else single
     if len(word) > 4 and lw.endswith("ies"):
         return word[:-3] + ("Y" if word[-1].isupper() else "y")
     if lw.endswith(("sses", "shes", "ches", "xes", "uses")):

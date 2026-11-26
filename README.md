@@ -32,7 +32,7 @@ Lines tagged `[auto]` come from the sources and are refreshed. **Every other lin
 
 | | |
 |---|---|
-| **Extract** | SQLite databases or `.sql` schema files, JSON Schema (draft 7 and 2020-12), and LLM tool definitions (Anthropic, OpenAI Chat and Responses, MCP `tools/list`) |
+| **Extract** | PostgreSQL, MySQL and SQLite (live databases or schema dumps), JSON Schema (draft 7 and 2020-12), and LLM tool definitions (Anthropic, OpenAI Chat and Responses, MCP `tools/list`) |
 | **Keep your edits** | Refresh replaces `[auto]` lines only. If you rewrite an extracted line, your version wins and is reported |
 | **Report drift** | `plainonto drift` exits 1 when the sources changed, so it can gate CI |
 | **Check** | Duplicate lines, unknown targets, undeclared prefixes, proposals waiting for review |
@@ -40,12 +40,12 @@ Lines tagged `[auto]` come from the sources and are refreshed. **Every other lin
 | **Export** | RDF Turtle (OWL structure, SKOS meaning) and LinkML YAML |
 | **Serve to agents** | An MCP server so agents look concepts up, validate their output, and propose new lines for a person to review |
 
-The core has no dependencies beyond the Python standard library. The MCP server needs the `mcp` extra.
+The core has no dependencies beyond the Python standard library. Extras: `mcp` for the MCP server, `postgres` and `mysql` for those databases, `all` for everything.
 
 ## Quick start
 
 ```bash
-pip install "plainontology[mcp]"
+pip install "plainontology[all]"     # or just [mcp], [postgres], [mysql]
 
 cd examples
 plainonto init library.onto --from sqlite:library.sql --from tools:agent-tools.json
@@ -60,13 +60,24 @@ plainonto validate library.onto Loan record.json
 
 The command is `plainonto` (short for `plainontology`; both work).
 
-Sources are written `KIND:PATH` and stored in the file, relative to it:
+Sources are written `KIND:LOCATION` and stored in the file; file paths are relative to it:
 
-| Kind | Path |
+| Kind | Location |
 |---|---|
-| `sqlite` | a SQLite database, or a `.sql` schema file (loaded into memory) |
+| `postgres` | a schema dump (`pg_dump --schema-only`), or a live database: `env:VARIABLE` holding the URL |
+| `mysql` | a schema dump (`mysqldump --no-data`), or a live MySQL or MariaDB database: `env:VARIABLE` |
+| `sqlite` | a SQLite database, or a SQLite-compatible `.sql` file (loaded into memory) |
 | `jsonschema` | a JSON Schema file; `$defs` and nested objects become concepts. For Pydantic, dump `Model.model_json_schema()` first |
 | `tools` | a JSON list of tool definitions, or an object with a `tools` list |
+
+**Databases.** Dumps are read in their own dialect: `CREATE TYPE ... AS ENUM`, arrays, `ALTER TABLE ... ADD CONSTRAINT` and unique indexes in PostgreSQL; `enum(...)`, `tinyint(1)` and `UNIQUE KEY` in MySQL. Everything else in a dump (`SET`, data, functions) is skipped. Live databases are read through SQLAlchemy, read-only:
+
+```bash
+export LIBRARY_DB="postgresql://reader@db.internal/library"   # password via ~/.pgpass, or in this variable
+plainonto init library.onto --from postgres:env:LIBRARY_DB
+```
+
+A URL with a password is refused, because the source line is saved in the ontology file.
 
 ## Use it from an AI agent (MCP)
 

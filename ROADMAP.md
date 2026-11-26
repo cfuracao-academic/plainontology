@@ -11,7 +11,10 @@
 
 ## Next
 
-- [ ] PostgreSQL and MySQL extractors (via SQLAlchemy inspection)
+- [x] PostgreSQL and MySQL extractors: dumps and live databases (0.2.0)
+- [ ] Read SQL table and column comments into definitions and descriptions
+- [ ] Recognise renamed tables and columns instead of remove + add
+- [ ] Mermaid diagram export
 - [ ] OpenAPI extractor (components/schemas and operations)
 - [ ] Pydantic extractor without dumping JSON Schema first
 - [ ] RAG metadata extractor (field names and values in a vector store's payloads)

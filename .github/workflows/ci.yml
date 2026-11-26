@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
 
 permissions:
@@ -23,6 +23,38 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
       - run: pytest -q
+
+  live-databases:
+    # Loads the example dumps into real servers and checks the live reader
+    # returns exactly what the dump reader returns.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: library
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: library
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ptest" --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      PLAINONTO_TEST_POSTGRES_URL: postgresql://postgres:test@localhost:5432/library
+      PLAINONTO_TEST_MYSQL_URL: mysql://root:test@127.0.0.1:3306/library
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: pytest -q -rs tests/test_sql_live.py
 
   example-drift:
     # The example file must match its sources, as a demo of using drift as a CI gate.

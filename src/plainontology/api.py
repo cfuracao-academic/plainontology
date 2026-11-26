@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .extract import extract_all, parse_source
+from .extract import extract_all, is_file_location, parse_source
+from .extract.sqllive import resolve_url
 from .merge import DriftReport, merge
 from .model import Ontology
 from .textformat import load, save
@@ -13,8 +14,13 @@ from .textformat import load, save
 
 def relative_source(spec: str, file_path: Path) -> str:
     """Rewrite a source given on the command line (relative to the current
-    directory) so it is relative to the ontology file instead."""
+    directory) so it is relative to the ontology file instead. Database URLs
+    are kept as they are, after checking they hold no password."""
     kind, path = parse_source(spec)
+    if not is_file_location(kind, path):
+        if not path.startswith("env:"):
+            resolve_url(path)  # raises if the URL would store a password
+        return spec
     p = Path(path)
     if p.is_absolute():
         return spec

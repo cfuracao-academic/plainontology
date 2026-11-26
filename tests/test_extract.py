@@ -28,6 +28,8 @@ def test_naming():
     assert concept_name("categories") == "Category"
     assert concept_name("status") == "Status"
     assert concept_name("addresses") == "Address"
+    assert concept_name("people") == "Person"
+    assert concept_name("user_children") == "UserChild"
     assert relation_name("author_id") == "author"
     assert relation_name("parentId") == "parent"
 
@@ -93,6 +95,6 @@ def test_tool_formats(tmp_path, shape):
 
 def test_bad_sources():
     with pytest.raises(ValueError):
-        parse_source("mysql:x")
+        parse_source("oracle:x")
     with pytest.raises(ValueError):
         parse_source("library.sql")

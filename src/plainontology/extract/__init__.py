@@ -1,5 +1,19 @@
-"""Source extractors. A source is written ``KIND:PATH``, for example
-``sqlite:data/library.db`` or ``tools:agent-tools.json``."""
+"""Source extractors. A source is written ``KIND:LOCATION``.
+
+==========  ===========================================================
+Kind        Location
+==========  ===========================================================
+sqlite      a SQLite database, or a SQLite-compatible .sql file
+postgres    a PostgreSQL schema file (pg_dump --schema-only), or a live
+            database: ``env:VARIABLE`` holding the URL, or a URL without
+            a password
+mysql       the same for MySQL and MariaDB (mysqldump --no-data)
+jsonschema  a JSON Schema file
+tools       a JSON file of LLM tool definitions
+==========  ===========================================================
+
+File locations are relative to the ontology file.
+"""
 
 from __future__ import annotations
 
@@ -9,28 +23,60 @@ from pathlib import Path
 from ..model import Concept, Ontology
 from .jsonschema import extract_jsonschema
 from .sqlite import extract_sqlite
+from .sqllive import is_live
+from .sqlmodel import tables_to_concepts
 from .tools import extract_tools
 
-EXTRACTORS: dict[str, Callable[[Path], list[Concept]]] = {
-    "sqlite": extract_sqlite,
-    "jsonschema": extract_jsonschema,
-    "tools": extract_tools,
+SQL_KINDS = ("postgres", "mysql")
+
+
+def _file(fn: Callable[[Path], list[Concept]]) -> Callable[[str, Path], list[Concept]]:
+    def run(location: str, base_dir: Path) -> list[Concept]:
+        path = Path(location)
+        return fn(path if path.is_absolute() else base_dir / path)
+
+    return run
+
+
+def _sql(dialect: str) -> Callable[[str, Path], list[Concept]]:
+    def run(location: str, base_dir: Path) -> list[Concept]:
+        if is_live(location):
+            from .sqllive import resolve_url, tables_from_database
+
+            tables = tables_from_database(resolve_url(location))
+        else:
+            from .sqldump import tables_from_file
+
+            path = Path(location)
+            tables = tables_from_file(path if path.is_absolute() else base_dir / path, dialect)
+        return tables_to_concepts(tables, dialect)
+
+    return run
+
+
+EXTRACTORS: dict[str, Callable[[str, Path], list[Concept]]] = {
+    "sqlite": _file(extract_sqlite),
+    "postgres": _sql("postgres"),
+    "mysql": _sql("mysql"),
+    "jsonschema": _file(extract_jsonschema),
+    "tools": _file(extract_tools),
 }
 
 
 def parse_source(spec: str) -> tuple[str, str]:
-    kind, sep, path = spec.partition(":")
-    if not sep or kind not in EXTRACTORS or not path:
-        raise ValueError(f"bad source '{spec}'; expected one of {', '.join(k + ':PATH' for k in EXTRACTORS)}")
-    return kind, path
+    kind, sep, location = spec.partition(":")
+    if not sep or kind not in EXTRACTORS or not location:
+        raise ValueError(f"bad source '{spec}'; expected one of {', '.join(k + ':LOCATION' for k in EXTRACTORS)}")
+    return kind, location
+
+
+def is_file_location(kind: str, location: str) -> bool:
+    return not (kind in SQL_KINDS and is_live(location))
 
 
 def extract(spec: str, base_dir: Path) -> list[Concept]:
-    kind, path = parse_source(spec)
-    target = Path(path)
-    if not target.is_absolute():
-        target = base_dir / target
-    return EXTRACTORS[kind](target)
+    kind, location = parse_source(spec)
+    return EXTRACTORS[kind](location, base_dir)
 
 
 def extract_all(sources: list[str], base_dir: Path) -> Ontology:
@@ -42,4 +88,4 @@ def extract_all(sources: list[str], base_dir: Path) -> Ontology:
     return onto
 
 
-__all__ = ["EXTRACTORS", "extract", "extract_all", "parse_source"]
+__all__ = ["EXTRACTORS", "SQL_KINDS", "extract", "extract_all", "is_file_location", "parse_source"]

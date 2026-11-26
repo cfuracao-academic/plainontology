@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "plainontology"
-version = "0.1.1"
+version = "0.2.0"
 description = "Write down the ontology and semantic layer a system already has as one plain text file: editable, diffable, exportable to OWL/SKOS and LinkML, and served to AI agents over MCP."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Christopher Furacão" }]
-keywords = ["ontology", "semantic layer", "knowledge graph", "skos", "owl", "linkml", "schema drift", "data dictionary", "mcp", "llm"]
+keywords = ["ontology", "postgresql", "mysql", "semantic layer", "knowledge graph", "skos", "owl", "linkml", "schema drift", "data dictionary", "mcp", "llm"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -25,7 +25,10 @@ dependencies = []
 
 [project.optional-dependencies]
 mcp = ["mcp>=2,<3"]
-dev = ["pytest>=8", "rdflib>=7", "pyyaml>=6", "mcp>=2,<3"]
+postgres = ["sqlglot>=30", "sqlalchemy>=2", "psycopg[binary]>=3.1"]
+mysql = ["sqlglot>=30", "sqlalchemy>=2", "pymysql>=1.1"]
+all = ["plainontology[mcp,postgres,mysql]"]
+dev = ["pytest>=8", "rdflib>=7", "pyyaml>=6", "plainontology[all]"]
 
 [project.scripts]
 plainontology = "plainontology.cli:main"
