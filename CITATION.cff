@@ -8,6 +8,7 @@ authors:
     given-names: "Christopher"
     orcid: "https://orcid.org/0009-0001-4154-6267"
 version: 0.1.0
+doi: 10.5281/zenodo.24562420
 license: MIT
 repository-code: "https://github.com/cfuracao-academic/plainontology"
 keywords:

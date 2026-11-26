@@ -4,6 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/plainontology)](https://pypi.org/project/plainontology/)
 [![Python](https://img.shields.io/badge/python-3.10%20to%203.13-blue)](pyproject.toml)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-green)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24562420.svg)](https://doi.org/10.5281/zenodo.24562420)
 
 **Write down the ontology your system already has, as one plain text file that people can edit and AI agents can read.**
 
@@ -147,7 +148,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [ROADMAP.md](ROADMAP.md).
 
 ## Citing
 
-If you use PlainOntology in research, please cite it using [CITATION.cff](CITATION.cff).
+If you use PlainOntology in research, please cite it using [CITATION.cff](CITATION.cff). The DOI [10.5281/zenodo.24562420](https://doi.org/10.5281/zenodo.24562420) always points to the latest version; each release also has its own DOI on Zenodo.
 
 ## Licence
 
