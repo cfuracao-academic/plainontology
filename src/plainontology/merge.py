@@ -358,6 +358,8 @@ def merge(current: Ontology, fresh: Ontology, renames: bool = True) -> tuple[Ont
         trailing_blank_before=current.trailing_blank_before,
         trailing_blanks=current.trailing_blanks,
         final_newline=current.final_newline,
+        leading_blanks=current.leading_blanks,
+        bom=current.bom,
     )
     for prefix, iri in fresh.prefixes.items():
         out.prefixes.setdefault(prefix, iri)
@@ -408,7 +410,9 @@ def merge(current: Ontology, fresh: Ontology, renames: bool = True) -> tuple[Ont
             # A person's (or a proposed) concept stays theirs; extracted lines still refresh inside it.
             out.concepts[name] = Concept(name, old.tag, statements, list(old.leading_comments), old.raw_header)
         else:
-            out.concepts[name] = Concept(name, new.tag, statements, list(old.leading_comments))
+            if old.tag != new.tag:  # e.g. the table behind it was renamed
+                report.add("changed", name, new.header(), old.header())
+            out.concepts[name] = Concept(name, new.tag, statements, list(old.leading_comments), old.raw_header)
 
     for old_name, name in order:  # keep the blank lines above each concept
         if old_name and name in out.concepts:

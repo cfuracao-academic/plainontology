@@ -8,6 +8,7 @@ read when sqlglot is installed (any of the ``postgres``/``mysql`` extras).
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
 import time
@@ -137,6 +138,18 @@ def read_tables(con: sqlite3.Connection, warnings: list[str] | None = None) -> l
         for idx in con.execute(f"PRAGMA index_list({_q(name)})").fetchall():
             if idx[2] and idx[3] != "pk":
                 cols = [r[2] for r in con.execute(f"PRAGMA index_info({_q(idx[1])})")]
+                partial = len(idx) > 4 and idx[4]
+                if partial or any(c is None for c in cols):
+                    # Unique only among some rows, or on an expression: a note, not a flag.
+                    row = con.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (idx[1],)
+                    ).fetchone()
+                    m = re.search(
+                        r"\bON\s+\S+\s*\((.*)\)\s*(WHERE\s+.*)?$", " ".join((row[0] or "").split()), re.I | re.S
+                    )
+                    on, where = (m[1], m[2] or "") if m else (", ".join(c or "?" for c in cols), "")
+                    t.notes.append(f"unique ({on})" + (" where " + where[5:].strip() if where else ""))
+                    continue
                 if len(cols) == 1:
                     t.unique.add(cols[0])
                 elif cols:

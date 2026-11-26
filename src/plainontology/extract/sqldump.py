@@ -542,11 +542,17 @@ class _Reader:
             elif kind == "INDEX" and node.args.get("unique") and isinstance(node.this, exp.Index):
                 index = node.this
                 params = index.args.get("params")
-                cols = [
-                    c.this.name for c in (params.args.get("columns") if params else None) or [] if hasattr(c, "this")
-                ]
+                parts = [getattr(c, "this", c) for c in (params.args.get("columns") if params else None) or []]
+                cols = [c.name for c in parts if isinstance(c, exp.Column)]
+                where = params.args.get("where") if params else None
                 table = index.args.get("table")
-                if table is not None and cols:
+                if table is not None and parts and (where is not None or len(cols) < len(parts)):
+                    # Unique only among some rows, or on an expression: not a plain unique column.
+                    t = self.table(self.qual(table))
+                    on = ", ".join(p.sql(self.dialect) for p in parts)
+                    note = f"unique ({on})" + (f" {where.sql(self.dialect)}" if where is not None else "")
+                    t.notes.append(note.replace("WHERE", "where", 1))
+                elif table is not None and cols:
                     t = self.table(self.qual(table))
                     if len(cols) == 1:
                         t.unique.add(cols[0])

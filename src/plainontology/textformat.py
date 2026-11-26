@@ -112,7 +112,9 @@ def _indent(raw: str) -> int:
 
 def loads(text: str) -> Ontology:
     onto = Ontology(from_file=True)
-    text = text.lstrip("\ufeff")
+    onto.bom = text.startswith("\ufeff")
+    text = text[1:] if onto.bom else text
+    first = True
     if "\r\n" in text:
         onto.newline = "\r\n"
     current: Concept | None = None
@@ -128,6 +130,8 @@ def loads(text: str) -> Ontology:
             blanks += 1
             continue
         gap, blanks = blanks, 0
+        if first:  # blank lines at the very start of the file
+            onto.leading_blanks, gap, first = gap, 0, False
         indent = _indent(raw)
         line = raw.strip()
         typed = raw.lstrip()  # as typed, trailing spaces included
@@ -306,18 +310,19 @@ def _preamble(onto: Ontology) -> list[str]:
 
 
 def dumps(onto: Ontology) -> str:
-    out = _preamble(onto)
+    out = [""] * onto.leading_blanks + _preamble(onto)
     for concept in onto.concepts.values():
         out.extend([""] * (concept.blank_before if out else 0))
         out.extend(dump_concept(concept))
     if onto.trailing_comments:
         out.extend([""] * onto.trailing_blank_before)
         out.extend(onto.trailing_comments)
-    return "\n".join(out) + "\n" * ((1 if onto.final_newline else 0) + onto.trailing_blanks)
+    text = "\n".join(out) + "\n" * ((1 if onto.final_newline else 0) + onto.trailing_blanks)
+    return ("\ufeff" if onto.bom else "") + text
 
 
 def load(path: str | Path) -> Ontology:
-    return loads(Path(path).read_bytes().decode("utf-8-sig"))  # bytes: keep CRLF line endings visible
+    return loads(Path(path).read_bytes().decode("utf-8"))  # bytes: keep CRLF and a BOM visible
 
 
 def save(path: str | Path, onto: Ontology) -> None:

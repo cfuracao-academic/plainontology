@@ -25,6 +25,17 @@
 - LinkML: mixins for further parents, `unique_keys`, rules, multilingual labels (checked with the LinkML tools in CI)
 - Turtle: language tags, labels on properties, `owl:hasKey`
 
+**Fixes from a fourth independent review**
+- A person's lines are never lost when a proposal and an extracted line describe the same property (for example after `rename` merges two concepts): the lines under the one that gives way move to the one that stays
+- JSON Schema and OpenAPI: an inline object never takes the name of a definition; a named `oneOf`/`anyOf` of objects in `$defs` or `components/schemas` becomes a concept its options are a kind of; schemas in other YAML files are read; a document that is a list describes its items; form and other non-JSON request bodies are read, and a body without a schema is a warning; a boolean `minimum` is a note, not a bound
+- `validate` accepts a record's own field names (`first name`, `@id`) as well as the property names they became
+- SQL: a CHECK on a foreign key column is kept as a note; a foreign key that is the key or unique is a `unique` relation; composite foreign keys in unique sets name the relation; several length bounds keep the strictest and big integer bounds stay exact; a table linking to a join table, and the join table, stay concepts; unique indexes with `WHERE` or on an expression are notes
+- PostgreSQL: unquoted names fold to lower case; `E'...'` strings are read; MySQL: mysqldump's `_utf8mb4'...'` strings are read
+- A changed concept tag (a renamed table behind the same concept) is drift and is written
+- SHACL: a subclass repeats its parents' property shapes except the ones it redefines
+- A UTF-8 byte order mark and blank lines at the start of a file are kept
+- Live databases: a host that does not answer fails after 10 seconds
+
 **Fixes from a third independent review**
 - Nothing extracted is dropped silently any more: join tables (also to a table not in the file, which stays a concept), tools, OpenAPI parameters and bodies, and dbt relations whose names clash get a new name with a warning
 - JSON Schema: a document that is only a `$ref` to one of its definitions (Pydantic's output for recursive models) follows it; a document named like one of its definitions keeps both; `required` covers properties declared inside `allOf`

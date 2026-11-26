@@ -192,8 +192,16 @@ def _read(
     for uc in _safe(lambda: insp.get_unique_constraints(name, schema=schema), []):
         sets.append(list(uc.get("column_names") or []))
     for ix in insp.get_indexes(name, schema=schema):
-        if ix.get("unique"):
-            sets.append([c for c in (ix.get("column_names") or []) if c])
+        if not ix.get("unique"):
+            continue
+        columns = list(ix.get("column_names") or [])
+        where = (ix.get("dialect_options") or {}).get("postgresql_where")
+        if where or any(c is None for c in columns):
+            # Unique only among some rows, or on an expression: a note, not a flag.
+            on = ", ".join(str(e) for e in (ix.get("expressions") or columns))
+            t.notes.append(f"unique ({on})" + (f" where {where}" if where else ""))
+            continue
+        sets.append([c for c in columns if c])
     for cols in sets:
         if len(cols) == 1:
             t.unique.add(cols[0])
@@ -206,6 +214,9 @@ def _read(
     return t
 
 
+CONNECT_SECONDS = 10
+
+
 def tables_from_database(url: str) -> list[Table]:
     try:
         import sqlalchemy as sa
@@ -214,7 +225,10 @@ def tables_from_database(url: str) -> list[Table]:
             "reading a live database needs SQLAlchemy and a driver: pip install 'plainontology[postgres]' "
             "or 'plainontology[mysql]'"
         ) from None
-    engine = sa.create_engine(url)
+    # A host that does not answer fails after CONNECT_SECONDS, not after minutes (CI, pre-commit).
+    backend = sa.engine.make_url(url).get_backend_name()
+    connect_args = {"connect_timeout": CONNECT_SECONDS} if backend in ("postgresql", "mysql", "mariadb") else {}
+    engine = sa.create_engine(url, connect_args=connect_args)
     try:
         insp = sa.inspect(engine)
         default = insp.default_schema_name

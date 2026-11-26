@@ -317,6 +317,8 @@ class Ontology:
     trailing_blank_before: int = 1
     trailing_blanks: int = 0  # blank lines at the very end of the file
     final_newline: bool = True
+    leading_blanks: int = 0  # blank lines at the very start of the file
+    bom: bool = False  # the file started with a UTF-8 byte order mark
     proposals_removed: bool = field(default=False, compare=False)  # set by accepted()
     duplicate_prefixes: list[str] = field(default_factory=list)
 
