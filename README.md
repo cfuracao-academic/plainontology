@@ -10,7 +10,7 @@
 
 **Try it:** `pip install plainontology`, then `plainonto init my.onto --from sqlite:my.db`
 
-![Demo: PlainOntology extracts a schema, a person adds definitions and synonyms, the database changes, drift is reported, and refresh keeps the person's lines](docs/demo.gif)
+![Demo: PlainOntology extracts a schema, a person adds definitions and synonyms, the database changes, drift is reported, and refresh keeps the person's lines](https://raw.githubusercontent.com/cfuracao-academic/plainontology/main/docs/demo.gif)
 
 Every running system carries an implicit ontology: tables and foreign keys, JSON schemas, the tool definitions an LLM agent calls. Its meaning (what a "loan" is, that a "Title" is a "Book", that `member` holds personal data) usually lives in people's heads. PlainOntology extracts the structure into a readable text file, keeps your hand-written meaning next to it, and tells you when the system drifts away from it.
 
