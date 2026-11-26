@@ -142,7 +142,8 @@ def _read(insp, conn, engine, name: str, schema: str | None, default: str | None
     t.primary_key = list(insp.get_pk_constraint(name, schema=schema).get("constrained_columns") or [])
     for fk in insp.get_foreign_keys(name, schema=schema):
         if fk.get("constrained_columns") and fk.get("referred_table"):
-            target = qualified(fk.get("referred_schema") or schema, fk["referred_table"], defaults)
+            # SQLAlchemy reports no referred_schema when the target is in the default schema.
+            target = qualified(fk.get("referred_schema"), fk["referred_table"], defaults)
             t.foreign_keys.append(ForeignKey(list(fk["constrained_columns"]), target))
     sets: list[list[str]] = []
     for uc in _safe(lambda: insp.get_unique_constraints(name, schema=schema), []):

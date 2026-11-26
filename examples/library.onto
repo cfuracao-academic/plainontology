@@ -1,4 +1,4 @@
-# PlainOntology file, format 0.1
+# PlainOntology file, format 0.2
 # Lines ending in [auto] come from the sources below and are refreshed by `plainonto refresh`.
 # Every other line is yours and is never overwritten. Format: see SPEC.md in the PlainOntology repo.
 
@@ -26,6 +26,7 @@ concept Book [auto: sqlite table books]
   tags -> Tag many [auto: via book_tags]
   definition "A title the library holds; one record per edition."
   synonym "Title"
+  label "Livre"@fr
   same_as schema:Book
 
 concept Tag [auto: sqlite table tags]

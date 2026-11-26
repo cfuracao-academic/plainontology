@@ -12,8 +12,9 @@
 ## Next
 
 - [x] PostgreSQL and MySQL extractors: dumps and live databases (0.2.0)
-- [ ] Read SQL table and column comments into definitions and descriptions
-- [ ] Recognise renamed tables and columns instead of remove + add
+- [x] Read SQL table and column comments into definitions and descriptions (0.2.0)
+- [x] Recognise renamed tables and columns (0.2.0)
+- [x] SHACL export, rules, language tags, JSON Schema across files (0.2.0)
 - [ ] Mermaid diagram export
 - [ ] OpenAPI extractor (components/schemas and operations)
 - [ ] Pydantic extractor without dumping JSON Schema first

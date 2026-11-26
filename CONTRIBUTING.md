@@ -19,10 +19,10 @@ pytest
 
 ## Adding an extractor
 
-1. Add `src/plainontology/extract/<kind>.py` with a function `extract_<kind>(path: Path) -> list[Concept]`.
+1. Add `src/plainontology/extract/<kind>.py` with a function `extract_<kind>(path: Path) -> list[Concept]`. For a new SQL dialect, read it into `Table` objects instead and call `tables_to_concepts` from `sqlmodel.py`, so every SQL source follows the same rules.
 2. Tag every concept and statement it produces with `Tag("auto", ...)`.
-3. Register it in `EXTRACTORS` in `src/plainontology/extract/__init__.py`.
-4. Add an example under `examples/` and tests under `tests/`.
+3. Register it in `EXTRACTORS` in `src/plainontology/extract/__init__.py` (wrap file-based extractors with `_file`).
+4. Add an example under `examples/` and tests under `tests/`. If it can read a live system, add a CI job that checks live and file reading agree, like `live-databases` in `.github/workflows/ci.yml`.
 
 ## Demo GIF
 

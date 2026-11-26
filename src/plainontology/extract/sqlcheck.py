@@ -76,7 +76,8 @@ def _conjuncts(node) -> list:
     return [node]
 
 
-_FLIP = {exp.GT: exp.LT, exp.GTE: exp.LTE, exp.LT: exp.GT, exp.LTE: exp.GTE}
+def _flip(cls):
+    return {exp.GT: exp.LT, exp.GTE: exp.LTE, exp.LT: exp.GT, exp.LTE: exp.GTE}[cls]
 
 
 def _comparison(node) -> list[Finding] | None:
@@ -84,7 +85,7 @@ def _comparison(node) -> list[Finding] | None:
         if isinstance(node, cls):
             left, right = node.this, node.expression
             if _number(left) is not None:
-                left, right, cls = right, left, _FLIP[cls]
+                left, right, cls = right, left, _flip(cls)
             value = _number(right)
             if value is None:
                 return None
@@ -123,6 +124,18 @@ def _part(node) -> list[Finding] | None:
     return _comparison(node)
 
 
+def _normalise(node):
+    """Drop brackets around single conditions, as databases do when they store a CHECK."""
+    connectives = (exp.And, exp.Or, exp.Not)
+
+    def strip(n):
+        if isinstance(n, exp.Paren) and not isinstance(n.this, connectives):
+            return n.this
+        return n
+
+    return node.transform(strip)
+
+
 def analyse(sql: str, dialect: str) -> list[Finding]:
     """Findings for one CHECK expression (without the CHECK keyword)."""
     if sqlglot is None:
@@ -135,7 +148,7 @@ def analyse(sql: str, dialect: str) -> list[Finding]:
     for part in _conjuncts(tree):
         found = _part(part)
         if found is None:
-            findings.append(Finding("note", value=part.sql(dialect)))
+            findings.append(Finding("note", value=_normalise(part).sql(dialect)))
         else:
             findings.extend(found)
     return findings

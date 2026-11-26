@@ -1,6 +1,6 @@
-# PlainOntology file format, version 0.1
+# PlainOntology file format, version 0.2
 
-A PlainOntology file is UTF-8 plain text, one statement per line. Files conventionally end in `.onto`.
+A PlainOntology file is UTF-8 plain text, one statement per line. Files conventionally end in `.onto`. Version 0.2 adds lines under properties, language tags, `unique (...)` and validation rules; every 0.1 file is a valid 0.2 file.
 
 ## File layout
 
@@ -14,15 +14,21 @@ source tools:agent-tools.json
 # a comment at the start of a line, before a concept, belongs to that concept
 concept Book [auto: sqlite table books]
   has title : text required [auto]
+  has isbn : text unique "ISBN-13 without hyphens." [auto]
+    label "ISBN"
+    length 13..13 [auto]
   # an indented comment stays inside the concept
   definition "A title the library holds."
+  label "Livre"@fr
+  unique (title, isbn)
 ```
 
 * Blank lines are ignored.
 * `prefix` and `source` lines must come before the first concept.
 * `prefix : <IRI>` (empty prefix) sets the base IRI used by exports.
-* These prefixes are known without declaring them: `owl rdf rdfs xsd skos schema dcterms foaf prov`.
+* These prefixes are known without declaring them: `owl rdf rdfs xsd skos sh schema dcterms foaf prov`.
 * A statement line is indented (spaces or tabs) and belongs to the concept above it.
+* A line indented further than a property line (`has` or `->`) belongs to that property.
 
 ## Concepts
 
@@ -32,18 +38,19 @@ concept NAME [TAG]
 
 `NAME` starts with a letter or `_` and may contain letters, digits, `_ . : / -`. Each name appears once per file.
 
-## Statements
+## Statements on a concept
 
 | Statement | Meaning | Layer |
 |---|---|---|
 | `has NAME : TYPE [FLAGS] ["description"]` | an attribute with a datatype | structure |
 | `NAME -> CONCEPT [FLAGS] ["description"]` | a relation to another concept (or a `prefix:Term`) | structure |
-| `is_a CONCEPT` | subclass of | structure |
-| `label "text"` | preferred human name | meaning |
-| `definition "text"` | what the concept is | meaning |
-| `synonym "text"` | another name people use | meaning |
+| `is_a CONCEPT` | subclass of (a concept may have several) | structure |
+| `unique (a, b)` | these properties together identify one record | structure |
+| `label "text"[@lang]` | preferred human name | meaning |
+| `definition "text"[@lang]` | what the concept is | meaning |
+| `synonym "text"[@lang]` | another name people use | meaning |
 | `same_as prefix:Term` | the same concept in another vocabulary | meaning |
-| `note "text"` | anything else worth knowing | meaning |
+| `note "text"[@lang]` | anything else worth knowing | meaning |
 | `# text` | a comment | |
 
 **Types:** `text`, `integer`, `decimal`, `boolean`, `date`, `datetime`, `binary`, `json`, `any`, or `enum(a|b|c)`. Enum values may contain spaces but not `|` or `)`.
@@ -51,6 +58,20 @@ concept NAME [TAG]
 **Flags:** `key` (identifier), `required`, `unique`, `many` (list or to-many relation).
 
 **Strings** are double-quoted; inside them use `\"` for a quote, `\\` for a backslash and `\n` for a new line.
+
+**Language tags** follow BCP 47 (`@fr`, `@pt-BR`). A string without a tag is the default language. One `label` and one `definition` per language.
+
+## Lines under a property
+
+| Line | Meaning |
+|---|---|
+| `label "text"[@lang]`, `synonym ...`, `note ...`, `definition ...` | meaning of the property itself; the description on the property line is its default definition |
+| `min N`, `max N` | inclusive bounds for numbers |
+| `length LOW..HIGH` | string length; either bound may be left out (`..13`, `1..`) |
+| `pattern "regex"` | the value must contain a match (anchor with `^...$` for a full match) |
+| `format NAME` | a JSON Schema format: `email`, `uri`, `uuid`, `hostname`, `ipv4`, `ipv6` are checked by `validate` |
+
+Rules apply to each value; for a `many` property, to each item. Rules are not allowed on a concept or under a relation.
 
 ## Tags
 
@@ -66,24 +87,29 @@ The detail after `auto:` records where a line came from, for example `fk books.a
 
 ## Identity of a line
 
-Merge matches lines by key, one line per key per concept:
+Merge matches lines by key, one line per key per concept (or per property, for lines under a property):
 
 | Statement | Key |
 |---|---|
 | `has` and `->` | the property name (they share one namespace) |
-| `label`, `definition` | the statement kind (one each per concept) |
+| `label`, `definition` | the statement kind and language |
+| `synonym`, `note` | the text and language |
 | `is_a`, `same_as` | the target |
-| `synonym`, `note`, comment | the text |
+| `unique (...)` | the set of properties, in any order |
+| `min`, `max`, `length`, `pattern`, `format` | the rule kind (one each per property) |
+| comment | the text |
 
 ## Refresh rules
 
 When `plainonto refresh` re-extracts the sources:
 
 1. Lines without a tag and `[proposed]` lines are kept, in place.
-2. Each `[auto]` line is replaced by the extracted line with the same key, or removed if the sources no longer produce it. New extracted lines are appended to their concept.
+2. Each `[auto]` line is replaced by the extracted line with the same key, or removed if the sources no longer produce it. New extracted lines are appended to their concept (or property).
 3. If a person's line has the same key as an extracted line, the person's line wins and the extracted line is not written. The drift report shows both (`=`).
-4. A concept that is gone from the sources is removed if it was extracted and holds none of your lines. If it holds your lines, it is kept, its tag is removed, and the report says so (`!`).
-5. Refresh is idempotent: running it twice changes nothing the second time.
+4. Lines under a property follow the same rules. If you rewrote a property line, extracted rules still arrive under your line.
+5. A concept or property that is gone from the sources is removed if it was extracted and holds none of your lines. If it holds your lines, it is kept, its tag is removed, and the report says so (`!`).
+6. **Renames.** If an extracted concept holding your lines disappears and exactly one new concept appears with at least 60% of the same properties (and at least two in common), it is a rename: your lines move to the new name, in the old place (`>`). If an extracted property holding your lines disappears and exactly one new property of the same kind and type appears in that concept, your lines move to it (`>`). Anything less certain is reported, not guessed; use `plainonto rename` for those.
+7. Refresh is idempotent: running it twice changes nothing the second time.
 
 ## Drift report symbols
 
@@ -92,11 +118,14 @@ When `plainonto refresh` re-extracts the sources:
 | `+` | added from the sources |
 | `-` | gone from the sources |
 | `~` | changed in the sources |
+| `>` | renamed in the sources; your lines moved with it |
 | `=` | your line kept over a different extracted line (not counted as drift) |
-| `!` | concept gone from the sources, kept because it holds your lines |
+| `!` | gone from the sources, kept because it holds your lines |
 
 ## Exports
 
-**Turtle:** each concept is an `owl:Class`; `has` lines become `owl:DatatypeProperty` and relations `owl:ObjectProperty`, scoped as `Concept/property`. Single-valued properties are also `owl:FunctionalProperty`; `required` and `key` add an `owl:minCardinality 1` restriction. Labels, definitions, synonyms and notes map to SKOS; `same_as` maps to `owl:equivalentClass`.
+**Turtle (OWL + SKOS):** each concept is an `owl:Class`; `has` lines become `owl:DatatypeProperty` and relations `owl:ObjectProperty`, scoped as `Concept/property`. Single-valued properties are also `owl:FunctionalProperty`; `required` and `key` add an `owl:minCardinality 1` restriction; `key` and `unique (...)` add `owl:hasKey`. Labels, definitions, synonyms and notes map to SKOS with their language tags, on the concept or on the property; `same_as` maps to `owl:equivalentClass`.
 
-**LinkML:** each concept is a class with `attributes`; `key` maps to `identifier`, `many` to `multivalued`, enums to LinkML enums, `same_as` to `exact_mappings`, synonyms to `aliases`.
+**SHACL:** one `sh:NodeShape` per concept targeting its class, with `sh:datatype` or `sh:class`, `sh:minCount`/`sh:maxCount` from `required`, `key` and `many`, `sh:in` for enums, and `sh:minInclusive`, `sh:maxInclusive`, `sh:minLength`, `sh:maxLength`, `sh:pattern` from the rules (formats `email`, `uri`, `uuid` become patterns).
+
+**LinkML:** each concept is a class with `attributes`; `key` maps to `identifier`, `many` to `multivalued`, `unique` and `unique (...)` to `unique_keys`, enums to LinkML enums, rules to `minimum_value`, `maximum_value` and `pattern`, `same_as` to `exact_mappings`, synonyms to `aliases` (`structured_aliases` with a language). The first `is_a` is `is_a`; further parents become `mixins`. Labels and definitions in other languages go to `annotations`.

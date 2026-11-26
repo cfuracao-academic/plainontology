@@ -17,7 +17,16 @@ from .conftest import EXAMPLES
 
 
 def _lines(concepts):
-    return {c.name: [s.body() for s in c.statements] for c in concepts}
+    """Lines per concept, with their child lines, in a stable order: a live database lists
+    tables alphabetically while a dump keeps file order."""
+    out = {}
+    for c in concepts:
+        lines = []
+        for s in c.statements:
+            lines.append(s.body())
+            lines += [f"{s.name}/{ch.body()}" for ch in s.children]
+        out[c.name] = sorted(lines)
+    return out
 
 
 def _load(url: str, sql: str, split: bool, reset: list[str]) -> None:
@@ -28,6 +37,8 @@ def _load(url: str, sql: str, split: bool, reset: list[str]) -> None:
             for statement in reset:
                 conn.exec_driver_sql(statement)
             if split:
+                # DELIMITER is a mysql client command, not SQL the server understands.
+                sql = re.sub(r"^DELIMITER\s+\S+\s*$", "", sql, flags=re.M).replace(";;", ";")
                 for chunk in re.split(r";\s*\n", sql):
                     body = "\n".join(l for l in chunk.splitlines() if not l.startswith("--")).strip()
                     if body:

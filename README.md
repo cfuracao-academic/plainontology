@@ -15,16 +15,23 @@
 Every running system carries an implicit ontology: tables and foreign keys, JSON schemas, the tool definitions an LLM agent calls. Its meaning (what a "loan" is, that a "Title" is a "Book", that `member` holds personal data) usually lives in people's heads. PlainOntology extracts the structure into a readable text file, keeps your hand-written meaning next to it, and tells you when the system drifts away from it.
 
 ```text
-concept Book [auto: sqlite table books]
+concept Book [auto: postgres table books]
+  definition "A title the library holds; one record per edition." [auto]
   has id : integer key [auto]
   has title : text required [auto]
-  has isbn : text unique "ISBN-13 without hyphens."
+  has isbn : text unique "ISBN-13 without hyphens." [auto]
+    length ..13 [auto]
+    label "ISBN"
+  has pages : integer [auto]
+    min 1 [auto]
   author -> Author required [auto: fk books.author_id]
   tags -> Tag many [auto: via book_tags]
-  definition "A title the library holds; one record per edition."
+  label "Livre"@fr
   synonym "Title"
   same_as schema:Book
 ```
+
+The definition and the description come from comments in the database, `length ..13` from `varchar(13)`, and `min 1` from `CHECK (pages > 0)`.
 
 Lines tagged `[auto]` come from the sources and are refreshed. **Every other line is yours and is never overwritten.**
 
@@ -32,12 +39,14 @@ Lines tagged `[auto]` come from the sources and are refreshed. **Every other lin
 
 | | |
 |---|---|
-| **Extract** | PostgreSQL, MySQL and SQLite (live databases or schema dumps), JSON Schema (draft 7 and 2020-12), and LLM tool definitions (Anthropic, OpenAI Chat and Responses, MCP `tools/list`) |
+| **Extract** | PostgreSQL, MySQL and SQLite (live databases or schema dumps), JSON Schema (draft 7 and 2020-12, across files), and LLM tool definitions (Anthropic, OpenAI Chat and Responses, MCP `tools/list`) |
 | **Keep your edits** | Refresh replaces `[auto]` lines only. If you rewrite an extracted line, your version wins and is reported |
+| **Follow renames** | A renamed table or column keeps your lines; `plainonto rename` handles the cases it cannot guess |
 | **Report drift** | `plainonto drift` exits 1 when the sources changed, so it can gate CI |
-| **Check** | Duplicate lines, unknown targets, undeclared prefixes, proposals waiting for review |
-| **Validate** | Check JSON records (for example an agent's structured output) against a concept |
-| **Export** | RDF Turtle (OWL structure, SKOS meaning) and LinkML YAML |
+| **Check** | Duplicate lines, unknown targets, undeclared prefixes, misplaced rules, proposals waiting for review |
+| **Validate** | Check JSON records (for example an agent's structured output) against a concept: types, enums, required fields, min, max, length, pattern, format |
+| **Multilingual** | Labels, definitions and synonyms in any language (`label "Livre"@fr`) |
+| **Export** | RDF Turtle (OWL structure, SKOS meaning), SHACL shapes for validating RDF data, and LinkML YAML |
 | **Serve to agents** | An MCP server so agents look concepts up, validate their output, and propose new lines for a person to review |
 
 The core has no dependencies beyond the Python standard library. Extras: `mcp` for the MCP server, `postgres` and `mysql` for those databases, `all` for everything.
@@ -54,8 +63,10 @@ plainonto refresh library.onto       # re-extract; your lines stay
 plainonto drift library.onto         # report only; exit 1 on drift
 plainonto check library.onto
 plainonto export library.onto --to turtle -o library.ttl
+plainonto export library.onto --to shacl -o library.shapes.ttl
 plainonto export library.onto --to linkml -o library.yaml
 plainonto validate library.onto Loan record.json
+plainonto rename library.onto Loan Borrowing   # or Concept.old Concept.new for a property
 ```
 
 The command is `plainonto` (short for `plainontology`; both work).
@@ -70,7 +81,19 @@ Sources are written `KIND:LOCATION` and stored in the file; file paths are relat
 | `jsonschema` | a JSON Schema file; `$defs` and nested objects become concepts. For Pydantic, dump `Model.model_json_schema()` first |
 | `tools` | a JSON list of tool definitions, or an object with a `tools` list |
 
-**Databases.** Dumps are read in their own dialect: `CREATE TYPE ... AS ENUM`, arrays, `ALTER TABLE ... ADD CONSTRAINT` and unique indexes in PostgreSQL; `enum(...)`, `tinyint(1)` and `UNIQUE KEY` in MySQL. Everything else in a dump (`SET`, data, functions) is skipped. Live databases are read through SQLAlchemy, read-only:
+**Databases.** Dumps are read in their own dialect, and live databases through SQLAlchemy, read-only. Both give the same result (CI checks this against real PostgreSQL 16 and MySQL 8.4 servers):
+
+| From the database | In the file |
+|---|---|
+| tables, views | concepts (views get a note); tables outside `public` keep their schema: `archive.orders` becomes `ArchiveOrder` |
+| table and column comments | the concept's definition, the property's description |
+| primary and foreign keys, unique constraints | `key`, relations, `unique`, `unique (a, b)` |
+| `CHECK (x IN (...))`, `CHECK (x >= 0)`, `CHECK (x ~ 'regex')`, `varchar(n)` | an enum, `min`, `pattern`, `length ..n`; other checks become notes |
+| enums, domains, arrays, `tinyint(1)` | `enum(...)`, the domain's type and rules, `many`, `boolean` |
+| join tables | a `many` relation; a join table with extra columns also stays a concept |
+| triggers | notes |
+
+Everything else in a dump (`SET`, data, functions) is skipped. For a live database:
 
 ```bash
 export LIBRARY_DB="postgresql://reader@db.internal/library"   # password via ~/.pgpass, or in this variable
@@ -141,16 +164,24 @@ source sqlite:library.sql
 
 concept NAME [auto: where it came from]
   has PROPERTY : TYPE [FLAGS] ["description"]
+    label "..."            (also synonym, note: about the property)
+    min N                  (also max N, length LOW..HIGH, pattern "regex", format email)
   PROPERTY -> CONCEPT [FLAGS] ["description"]
   is_a CONCEPT
-  label "..."
-  definition "..."
-  synonym "..."
-  note "..."
+  unique (PROPERTY, PROPERTY)
+  label "..."@fr           (also definition, synonym, note; language tag optional)
   same_as prefix:Term
 ```
 
 Types: `text integer decimal boolean date datetime binary json any enum(a|b)`. Flags: `key required unique many`. The empty prefix line sets the base IRI for exports.
+
+## Known limitations
+
+* Concept names are made with English singular rules (`books` becomes `Book`, `people` becomes `Person`).
+* The MCP server searches by keyword, runs locally over stdio, and does not lock the file while an agent proposes a line.
+* JSON Schema references to web URLs are not fetched; `plainonto check` flags the missing concept.
+* CHECK constraints more complex than a list, a comparison, a range or a regex are kept as notes, not enforced by `validate`.
+* Views are read for their columns and types; the meaning of the query itself is not.
 
 ## Development
 
