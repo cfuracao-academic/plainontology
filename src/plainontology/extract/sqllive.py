@@ -35,7 +35,7 @@ def with_driver(url: str) -> str:
     """Add the driver PlainOntology installs (psycopg, pymysql) to a plain URL."""
     for prefix, driver in _DRIVERS.items():
         if url.startswith(prefix):
-            return driver + url[len(prefix):]
+            return driver + url[len(prefix) :]
     return url
 
 
@@ -54,7 +54,7 @@ def resolve_url(location: str) -> str:
     try:
         from sqlalchemy.engine import make_url
     except ImportError:
-        make_url = None
+        make_url = None  # type: ignore[assignment]
     if make_url is not None and make_url(location).password:
         raise ValueError(
             "the database URL contains a password, which would be saved in the ontology file; "
@@ -117,24 +117,31 @@ def _triggers(conn, dialect_name: str, schema: str | None) -> dict[str, list[str
         where = "event_object_schema = :schema" if schema else "event_object_schema = DATABASE()"
         if dialect_name == "postgresql" and not schema:
             where = "event_object_schema = current_schema()"
-        rows = conn.execute(sa.text(
-            "SELECT trigger_name, action_timing, event_manipulation, event_object_table "
-            f"FROM information_schema.triggers WHERE {where} ORDER BY trigger_name"), {"schema": schema} if schema else {})
+        rows = conn.execute(
+            sa.text(
+                "SELECT trigger_name, action_timing, event_manipulation, event_object_table "
+                f"FROM information_schema.triggers WHERE {where} ORDER BY trigger_name"
+            ),
+            {"schema": schema} if schema else {},
+        )
         grouped: dict[tuple[str, str, str], list[str]] = {}
         for name, timing, event, table in rows:
             grouped.setdefault((table, name, timing), []).append(event)
         for (table, name, timing), events in grouped.items():
             found.setdefault(table, []).append(f"{name}: {timing} {', '.join(dict.fromkeys(events))}")
     elif dialect_name == "sqlite":
-        for name, table, sql in conn.execute(sa.text("SELECT name, tbl_name, sql FROM sqlite_master WHERE type='trigger'")):
+        for name, table, sql in conn.execute(
+            sa.text("SELECT name, tbl_name, sql FROM sqlite_master WHERE type='trigger'")
+        ):
             m = _SQLITE_TRIGGER.search(sql or "")
             if m:
                 found.setdefault(table, []).append(f"{name}: {' '.join(m[2].upper().split())} {m[3].upper()}")
     return found
 
 
-def _read(insp, conn, engine, name: str, schema: str | None, default: str | None, kind: str, triggers,
-          domains: dict[str, str]) -> Table:
+def _read(
+    insp, conn, engine, name: str, schema: str | None, default: str | None, kind: str, triggers, domains: dict[str, str]
+) -> Table:
     defaults = (default.lower(),) if default else ()
     t = Table(qualified(schema, name, defaults), kind=kind)
     for col in insp.get_columns(name, schema=schema):
@@ -142,8 +149,11 @@ def _read(insp, conn, engine, name: str, schema: str | None, default: str | None
         if kind == "view":  # views report types and lengths only, as the dump reader does
             t.columns.append(Column(col["name"], datatype, False, many, "", length))
             continue
-        t.columns.append(Column(col["name"], datatype, not col.get("nullable", True), many,
-                                col.get("comment") or "", length, pattern))
+        t.columns.append(
+            Column(
+                col["name"], datatype, not col.get("nullable", True), many, col.get("comment") or "", length, pattern
+            )
+        )
     comment = _safe(lambda: insp.get_table_comment(name, schema=schema), {}) or {}
     t.comment = comment.get("text") or ""
     if kind == "view":
@@ -176,30 +186,36 @@ def tables_from_database(url: str) -> list[Table]:
     try:
         import sqlalchemy as sa
     except ImportError:
-        raise ValueError("reading a live database needs SQLAlchemy and a driver: pip install 'plainontology[postgres]' "
-                         "or 'plainontology[mysql]'") from None
+        raise ValueError(
+            "reading a live database needs SQLAlchemy and a driver: pip install 'plainontology[postgres]' "
+            "or 'plainontology[mysql]'"
+        ) from None
     engine = sa.create_engine(url)
     try:
         insp = sa.inspect(engine)
         default = insp.default_schema_name
         domains: dict[str, str] = {}
         if engine.dialect.name == "postgresql":
-            schemas = [s for s in insp.get_schema_names() if not _PG_SYSTEM.match(s)]
+            schemas: list[str | None] = [s for s in insp.get_schema_names() if not _PG_SYSTEM.match(s)]
             schemas.sort(key=lambda s: (s != default, s))
             with engine.connect() as conn:
-                rows = conn.execute(sa.text(
-                    "SELECT t.typname, format_type(t.typbasetype, t.typtypmod) FROM pg_catalog.pg_type t "
-                    "WHERE t.typtype = 'd'"))
+                rows = conn.execute(
+                    sa.text(
+                        "SELECT t.typname, format_type(t.typbasetype, t.typtypmod) FROM pg_catalog.pg_type t "
+                        "WHERE t.typtype = 'd'"
+                    )
+                )
                 domains = {str(name).lower(): str(declared) for name, declared in rows}
         else:
-            schemas = [None]
+            schemas = [None]  # MySQL and SQLite: the connected database only
         tables: list[Table] = []
+        dialect_name = engine.dialect.name
         with engine.connect() as conn:
             for schema in schemas:
-                triggers = _safe(lambda: _triggers(conn, engine.dialect.name, schema), {})
+                triggers = _safe(lambda s=schema: _triggers(conn, dialect_name, s), {})
                 for name in insp.get_table_names(schema=schema):
                     tables.append(_read(insp, conn, engine, name, schema, default, "table", triggers, domains))
-                for name in _safe(lambda: insp.get_view_names(schema=schema), []):
+                for name in _safe(lambda s=schema: insp.get_view_names(schema=s), []):
                     tables.append(_read(insp, conn, engine, name, schema, default, "view", triggers, domains))
         return tables
     finally:

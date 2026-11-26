@@ -44,7 +44,11 @@ def extract_tools(path: Path) -> list[Concept]:
         "Tool": Concept(
             "Tool",
             Tag("auto", f"tools {path.name}"),
-            [Statement("definition", value="An action an AI agent can call; its properties are the call's input.", tag=AUTO)],
+            [
+                Statement(
+                    "definition", value="An action an AI agent can call; its properties are the call's input.", tag=AUTO
+                )
+            ],
         )
     }
     for name, description, params in iter_tools(doc):

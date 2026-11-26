@@ -24,7 +24,13 @@ def test_check_finds_problems():
 
 def test_validate_record():
     onto = load(EXAMPLES / "library.onto")
-    good = {"id": 1, "title": "Dune", "isbn": "9780441013593", "author": {"id": 7, "name": "Frank Herbert"}, "tags": [3, 4]}
+    good = {
+        "id": 1,
+        "title": "Dune",
+        "isbn": "9780441013593",
+        "author": {"id": 7, "name": "Frank Herbert"},
+        "tags": [3, 4],
+    }
     assert validate_record(onto, "Book", good) == []
     bad = {"title": 5, "colour": "red", "author": {"born": "not a date"}, "tags": 3, "published": "2026-13-01"}
     issues = validate_record(onto, "book", bad)

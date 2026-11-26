@@ -4,7 +4,7 @@ import pytest
 
 from plainontology.textformat import ParseError, dumps, loads, parse_statement
 
-TEXT = '''\
+TEXT = """\
 concept Book
   label "Book"
   label "Livre"@fr
@@ -22,7 +22,7 @@ concept Book
   author -> Author required
     note "The first author when there are several."
   unique (isbn, pages)
-'''
+"""
 
 
 def test_round_trip():
@@ -50,12 +50,15 @@ def test_unique_key_ignores_order():
     assert parse_statement("unique (a, b)").key() == parse_statement("unique (b,a)").key()
 
 
-@pytest.mark.parametrize("text,message", [
-    ("concept A\n  min 1\n", "belongs under a property"),
-    ("concept A\n  has x : text\n    has y : text\n", "cannot sit under a property"),
-    ("concept A\n  has x : text\n    length ..\n", "at least one bound"),
-    ("concept A\n  has x : text\n    pattern \"([\"\n", "not a valid regular expression"),
-])
+@pytest.mark.parametrize(
+    "text,message",
+    [
+        ("concept A\n  min 1\n", "belongs under a property"),
+        ("concept A\n  has x : text\n    has y : text\n", "cannot sit under a property"),
+        ("concept A\n  has x : text\n    length ..\n", "at least one bound"),
+        ('concept A\n  has x : text\n    pattern "(["\n', "not a valid regular expression"),
+    ],
+)
 def test_errors(text, message):
     with pytest.raises(ParseError, match=message):
         loads(text)

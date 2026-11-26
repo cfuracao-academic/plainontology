@@ -1,0 +1,22 @@
+name: Feature or new source
+description: Suggest a feature, a new source (for example OpenAPI or dbt) or an export.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation, not the solution. Which system, which schema, who reads the result?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: For a new source, link a public example file if you can.
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I could open a pull request for this (see CONTRIBUTING.md).

@@ -26,8 +26,24 @@ from typing import Any
 from ..model import AUTO, Concept, Statement, Tag
 from ..naming import pascal, safe_name, singular
 
-_FORMATS = {"email", "idn-email", "uri", "uri-reference", "iri", "iri-reference", "uuid", "hostname",
-            "idn-hostname", "ipv4", "ipv6", "time", "duration", "uri-template", "json-pointer", "regex"}
+_FORMATS = {
+    "email",
+    "idn-email",
+    "uri",
+    "uri-reference",
+    "iri",
+    "iri-reference",
+    "uuid",
+    "hostname",
+    "idn-hostname",
+    "ipv4",
+    "ipv6",
+    "time",
+    "duration",
+    "uri-template",
+    "json-pointer",
+    "regex",
+}
 
 
 def _clean(text: Any) -> str:
@@ -107,15 +123,13 @@ class SchemaWalker:
     def ensure_ref(self, ref: str) -> None:
         name = self.ref_name(ref)
         walker, resolved = self.resolve(ref)
-        if name not in self.concepts and resolved is not None and walker.is_object(resolved):
+        if name not in self.concepts and walker is not None and resolved is not None and walker.is_object(resolved):
             walker.object_concept(name, resolved, f"jsonschema {walker.label} #{ref.partition('#')[2]}")
 
     # shapes -----------------------------------------------------------
     @staticmethod
     def is_object(ps: dict) -> bool:
-        return ps.get("type") == "object" or (
-            ps.get("type") is None and ("properties" in ps or "allOf" in ps)
-        )
+        return ps.get("type") == "object" or (ps.get("type") is None and ("properties" in ps or "allOf" in ps))
 
     @staticmethod
     def branches(ps: dict) -> list[dict] | None:
@@ -195,7 +209,12 @@ class SchemaWalker:
             if "$ref" not in ps:
                 break
             target_walker, resolved = walker.resolve(ps["$ref"])
-            if resolved is None or target_walker.is_object(resolved) or target_walker.branches(resolved):
+            if (
+                target_walker is None
+                or resolved is None
+                or target_walker.is_object(resolved)
+                or target_walker.branches(resolved)
+            ):
                 break
             extra = {k: v for k, v in ps.items() if k != "$ref"}
             walker, ps = target_walker, target_walker.unwrap({**resolved, **extra})
@@ -227,7 +246,13 @@ class SchemaWalker:
             out.append(Statement("max", value=_num(high), tag=AUTO))
         lo_len, hi_len = ps.get("minLength"), ps.get("maxLength")
         if lo_len is not None or hi_len is not None:
-            out.append(Statement("length", value=f"{lo_len if lo_len is not None else ''}..{hi_len if hi_len is not None else ''}", tag=AUTO))
+            out.append(
+                Statement(
+                    "length",
+                    value=f"{lo_len if lo_len is not None else ''}..{hi_len if hi_len is not None else ''}",
+                    tag=AUTO,
+                )
+            )
         if isinstance(ps.get("pattern"), str):
             try:
                 re.compile(ps["pattern"])
@@ -242,13 +267,13 @@ class SchemaWalker:
     def _union(self, owner: str, pname: str, options: list[dict], many: bool) -> tuple[str, str, str]:
         enums = [o.get("enum", [o["const"]] if "const" in o else None) for o in options]
         if all(e is not None for e in enums):
-            values = list(dict.fromkeys(_enum_token(v) for e in enums for v in e if v is not None))
+            values = list(dict.fromkeys(_enum_token(v) for e in enums for v in (e or []) if v is not None))
             return "has", f"enum({'|'.join(values)})", ""
         resolved = []
         for o in options:
-            walker, node = (self.resolve(o["$ref"]) if "$ref" in o else (self, o))
+            walker, node = self.resolve(o["$ref"]) if "$ref" in o else (self, o)
             resolved.append((o, walker, node))
-        if all(node is not None and walker.is_object(node) for _, walker, node in resolved):
+        if all(node is not None and walker is not None and walker.is_object(node) for _, walker, node in resolved):
             name = pascal(f"{owner} {singular(pname) if many else pname}")
             union = Concept(name, Tag("auto", f"jsonschema {self.label} {owner}.{pname} (one of)"))
             self.concepts.setdefault(name, union)
@@ -258,6 +283,7 @@ class SchemaWalker:
                     self.ensure_ref(o["$ref"])
                     member = self.ref_name(o["$ref"])
                 else:
+                    assert walker is not None and node is not None  # checked above
                     member = pascal(node.get("title") or f"{name} option {i + 1}")
                     walker.object_concept(member, node, f"jsonschema {self.label} {owner}.{pname} option {i + 1}")
                 members.append(member)
@@ -266,8 +292,11 @@ class SchemaWalker:
             self.concepts[name].add(Statement("definition", value="One of: " + ", ".join(members) + ".", tag=AUTO))
             return "rel", name, ""
         kinds = []
-        for o, walker, node in resolved:
-            k, t, _ = walker._target(owner, pname, walker.unwrap(node or {}), many)
+        for _option, option_walker, node in resolved:
+            if option_walker is None:
+                kinds.append("any")
+                continue
+            _k, t, _ = option_walker._target(owner, pname, option_walker.unwrap(node or {}), many)
             kinds.append(t)
         return "has", "any", "one of: " + ", ".join(dict.fromkeys(kinds))
 
@@ -300,7 +329,7 @@ class SchemaWalker:
             if fmt in ("byte", "binary") or ps.get("contentEncoding") == "base64":
                 return "has", "binary", ""
             return "has", "text", ""
-        return "has", {"integer": "integer", "number": "decimal", "boolean": "boolean"}.get(t, "any"), ""
+        return "has", {"integer": "integer", "number": "decimal", "boolean": "boolean"}.get(str(t), "any"), ""
 
 
 def root_name(schema: dict, path: Path | None) -> str:

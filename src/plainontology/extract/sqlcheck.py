@@ -9,19 +9,20 @@ constraint is silently lost. Needs sqlglot; without it every check is a note.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 try:
     import sqlglot
     from sqlglot import exp
 except ImportError:  # pragma: no cover
-    sqlglot = None
+    sqlglot = None  # type: ignore[assignment]
 
 
 @dataclass
 class Finding:
     kind: str  # enum, min, max, length_max, length_min, pattern, note
     column: str = ""
-    value: object = None
+    value: Any = None
     exclusive: bool = False
 
 

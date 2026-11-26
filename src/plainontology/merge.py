@@ -98,13 +98,13 @@ class DriftReport:
         kept = sum(1 for c in self.changes if c.kind == "kept_yours")
         warned = len(self.warnings)
         if drift == 0 and kept == 0:
-            return "\n".join(lines + ["", f"No drift; {warned} warning(s)."])
+            return "\n".join([*lines, "", f"No drift; {warned} warning(s)."])
         summary = f"{drift} change(s) from the sources"
         if kept:
             summary += f", {kept} line(s) of yours kept over the sources"
         if warned:
             summary += f", {warned} warning(s)"
-        return "\n".join(lines + ["", summary + "."])
+        return "\n".join([*lines, "", summary + "."])
 
 
 def _has_yours(statement: Statement) -> bool:
@@ -116,8 +116,9 @@ def _merge_children(old: list[Statement], new: list[Statement], where: str, repo
     return _merge_lines(old, new, where, report, renames=False)
 
 
-def _merge_lines(old: list[Statement], new: list[Statement], where: str, report: DriftReport,
-                 renames: bool = True) -> list[Statement]:
+def _merge_lines(
+    old: list[Statement], new: list[Statement], where: str, report: DriftReport, renames: bool = True
+) -> list[Statement]:
     yours = [s for s in old if not s.is_auto]
     your_keys = {s.key() for s in yours if s.kind != "comment"}
     fresh: dict[tuple, Statement] = {}
@@ -146,7 +147,9 @@ def _merge_lines(old: list[Statement], new: list[Statement], where: str, report:
             mine = copy.deepcopy(s)
             if s.is_property:
                 match = fresh.get(key)
-                mine.children = _merge_children(s.children, match.children if match else [], f"{where}.{s.name}", report)
+                mine.children = _merge_children(
+                    s.children, match.children if match else [], f"{where}.{s.name}", report
+                )
             merged.append(mine)
             continue
         if key in your_keys or key in placed or id(s) in renamed_old:
@@ -195,13 +198,18 @@ def _prop_names(concept: Concept) -> set[str]:
 
 
 def _holds_yours(concept: Concept) -> bool:
-    return bool(concept.leading_comments) or any(not s.is_auto or (s.is_property and _has_yours(s)) for s in concept.statements)
+    return bool(concept.leading_comments) or any(
+        not s.is_auto or (s.is_property and _has_yours(s)) for s in concept.statements
+    )
 
 
 def _concept_renames(current: Ontology, fresh: Ontology) -> dict[str, str]:
     """Map old concept name -> new concept name for likely renames."""
-    gone = [c for n, c in current.concepts.items() if n not in fresh.concepts and c.tag is not None
-            and c.tag.kind == "auto" and _holds_yours(c)]
+    gone = [
+        c
+        for n, c in current.concepts.items()
+        if n not in fresh.concepts and c.tag is not None and c.tag.kind == "auto" and _holds_yours(c)
+    ]
     new = [c for n, c in fresh.concepts.items() if n not in current.concepts]
     renames: dict[str, str] = {}
     taken: set[str] = set()
@@ -241,22 +249,23 @@ def merge(current: Ontology, fresh: Ontology, renames: bool = True) -> tuple[Ont
     for concept, message in fresh.warnings:
         report.add("warning", concept, message)
     detect_renames = renames
-    renames = _concept_renames(current, fresh) if detect_renames else {}
-    renamed_to = set(renames.values())
+    rename_map = _concept_renames(current, fresh) if detect_renames else {}
+    renamed_to = set(rename_map.values())
 
     order: list[tuple[str, str]] = []  # (old name or "", new name)
     for name in current.concepts:
-        order.append((name, renames.get(name, name)))
+        order.append((name, rename_map.get(name, name)))
     order += [("", n) for n in fresh.concepts if n not in current.concepts and n not in renamed_to]
 
     for old_name, name in order:
         old = current.concepts.get(old_name) if old_name else None
         new = fresh.concepts.get(name)
         if old is None:
+            assert new is not None  # only names from the sources reach here without an old concept
             out.concepts[name] = copy.deepcopy(new)
             report.add("concept_added", name, new.header())
             continue
-        if old_name != name:
+        if old_name != name and new is not None:
             report.add("concept_renamed", name, new.header(), old_name)
 
         if new is None:

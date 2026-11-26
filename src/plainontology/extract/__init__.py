@@ -98,9 +98,13 @@ def extract_all(sources: list[str], base_dir: Path) -> Ontology:
             first = origin.setdefault(concept.name, spec)
             if first != spec and not _shared(concept.name, first, spec):
                 existing = {s.key(): s for s in onto.concepts[concept.name].statements}
-                clashes = sum(1 for s in concept.statements if s.key() in existing and existing[s.key()].body() != s.body())
+                clashes = sum(
+                    1 for s in concept.statements if s.key() in existing and existing[s.key()].body() != s.body()
+                )
                 detail = f"; {clashes} line(s) differ and the first source wins" if clashes else ""
-                onto.warnings.append((concept.name, f"defined by both {first} and {spec}; their lines are combined{detail}"))
+                onto.warnings.append(
+                    (concept.name, f"defined by both {first} and {spec}; their lines are combined{detail}")
+                )
             onto.add_concept(concept)
     return onto
 

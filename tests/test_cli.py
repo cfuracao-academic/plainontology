@@ -14,7 +14,9 @@ def test_init_refresh_drift_cycle(examples, monkeypatch, capsys):
 
     # The database changes: a new column appears.
     sql = examples / "library.sql"
-    sql.write_text(sql.read_text(encoding="utf-8").replace("country TEXT", "country TEXT,\n    website TEXT"), encoding="utf-8")
+    sql.write_text(
+        sql.read_text(encoding="utf-8").replace("country TEXT", "country TEXT,\n    website TEXT"), encoding="utf-8"
+    )
     capsys.readouterr()
     assert main(["drift", "out/lib.onto"]) == 1
     assert "+ Author: has website : text" in capsys.readouterr().out

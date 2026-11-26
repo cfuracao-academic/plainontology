@@ -29,7 +29,8 @@ def test_article_example():
     assert 'has rating : any "one of: integer, text"' in article  # anyOf of simple types
     assert concepts["Reviewer"][:2] == [
         'definition "A person who checks an article before it goes live; defined in its own file."',
-        "has name : text required"]
+        "has name : text required",
+    ]
     assert concepts["ArticleAttachment"] == ['definition "One of: Image, Video."']
     assert "is_a ArticleAttachment" in concepts["Image"] and "is_a ArticleAttachment" in concepts["Video"]
     video = concepts["Video"]
@@ -37,15 +38,19 @@ def test_article_example():
 
 
 def test_enum_options_merge(tmp_path):
-    schema = {"title": "Ticket", "type": "object", "properties": {
-        "state": {"oneOf": [{"enum": ["open", "closed"]}, {"const": "archived"}]},
-        "price": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
-        "tags": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 5},
-        "owner": {"$ref": "https://example.org/person.json"},
-    }}
+    schema = {
+        "title": "Ticket",
+        "type": "object",
+        "properties": {
+            "state": {"oneOf": [{"enum": ["open", "closed"]}, {"const": "archived"}]},
+            "price": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+            "tags": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 5},
+            "owner": {"$ref": "https://example.org/person.json"},
+        },
+    }
     (tmp_path / "ticket.json").write_text(json.dumps(schema), encoding="utf-8")
     ticket = _lines(extract("jsonschema:ticket.json", tmp_path))["Ticket"]
     assert "has state : enum(open|closed|archived)" in ticket
-    assert ticket[ticket.index("has price : decimal") + 1:][:2] == ["  max 100", '  note "greater than 0"']
+    assert ticket[ticket.index("has price : decimal") + 1 :][:2] == ["  max 100", '  note "greater than 0"']
     assert '  note "1 to 5 items"' in ticket
     assert "owner -> Person" in ticket  # web references are not fetched; check flags the target

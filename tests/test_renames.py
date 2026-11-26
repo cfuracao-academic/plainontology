@@ -21,7 +21,10 @@ concept Loan [auto: sqlite table loans]
 
 
 def test_property_kept_when_it_holds_your_lines():
-    fresh = loads("concept Book [auto: sqlite table books]\n  has id : integer key [auto]\n  has isbn : text [auto]\n  has pages : integer [auto]\n")
+    fresh = loads(
+        "concept Book [auto: sqlite table books]\n"
+        "  has id : integer key [auto]\n  has isbn : text [auto]\n  has pages : integer [auto]\n"
+    )
     merged, report = merge(loads(CURRENT), fresh)
     title = merged.concepts["Book"].prop("title")
     assert title.tag is None and [c.render() for c in title.children] == ['label "Title"@en']
@@ -29,7 +32,11 @@ def test_property_kept_when_it_holds_your_lines():
 
 
 def test_property_rename_moves_your_lines():
-    fresh = loads(CURRENT.replace("has title : text required [auto]\n    label \"Title\"@en\n", "has headline : text required [auto]\n"))
+    fresh = loads(
+        CURRENT.replace(
+            'has title : text required [auto]\n    label "Title"@en\n', "has headline : text required [auto]\n"
+        )
+    )
     merged, report = merge(loads(CURRENT), fresh)
     book = merged.concepts["Book"]
     assert book.prop("title") is None
@@ -38,9 +45,12 @@ def test_property_rename_moves_your_lines():
 
 
 def test_concept_rename_moves_your_lines():
-    fresh = loads(CURRENT.replace("concept Book [auto: sqlite table books]", "concept Volume [auto: sqlite table volumes]")
-                  .replace('    label "Title"@en\n', "").replace('  definition "A title the library holds."\n', "")
-                  .replace("book -> Book", "volume -> Volume"))
+    fresh = loads(
+        CURRENT.replace("concept Book [auto: sqlite table books]", "concept Volume [auto: sqlite table volumes]")
+        .replace('    label "Title"@en\n', "")
+        .replace('  definition "A title the library holds."\n', "")
+        .replace("book -> Book", "volume -> Volume")
+    )
     merged, report = merge(loads(CURRENT), fresh)
     assert list(merged.concepts) == ["Volume", "Loan"]  # same place in the file
     volume = merged.concepts["Volume"]
@@ -52,8 +62,10 @@ def test_concept_rename_moves_your_lines():
 
 
 def test_unrelated_concept_is_not_taken_for_a_rename():
-    fresh = loads("concept Member [auto: sqlite table members]\n  has id : integer key [auto]\n  has email : text [auto]\n"
-                  "\nconcept Loan [auto: sqlite table loans]\n  has id : integer key [auto]\n")
+    fresh = loads(
+        "concept Member [auto: sqlite table members]\n  has id : integer key [auto]\n  has email : text [auto]\n"
+        "\nconcept Loan [auto: sqlite table loans]\n  has id : integer key [auto]\n"
+    )
     merged, report = merge(loads(CURRENT), fresh)
     assert "Book" in merged.concepts and "Member" in merged.concepts
     assert any(c.kind == "concept_kept" for c in report.changes)
@@ -61,7 +73,10 @@ def test_unrelated_concept_is_not_taken_for_a_rename():
 
 def test_rename_command(tmp_path, capsys):
     f = tmp_path / "lib.onto"
-    f.write_text(CURRENT + "\nconcept Shelf\n  is_a Book\n  unique (code, room)\n  has code : text\n  has room : text\n", encoding="utf-8")
+    f.write_text(
+        CURRENT + "\nconcept Shelf\n  is_a Book\n  unique (code, room)\n  has code : text\n  has room : text\n",
+        encoding="utf-8",
+    )
     assert main(["rename", str(f), "Book", "Volume"]) == 0
     onto = load(f)
     assert "Volume" in onto.concepts and "Book" not in onto.concepts
@@ -74,7 +89,9 @@ def test_rename_command(tmp_path, capsys):
 
 
 def test_rename_onto_existing_concept_merges():
-    onto = loads('concept Old\n  definition "Kept."\n  synonym "Legacy"\n\nconcept New [auto: x]\n  has id : integer [auto]\n')
+    onto = loads(
+        'concept Old\n  definition "Kept."\n  synonym "Legacy"\n\nconcept New [auto: x]\n  has id : integer [auto]\n'
+    )
     message = rename(onto, "Old", "New")
     assert message.startswith("Merged Old into New")
     assert list(onto.concepts) == ["New"] and onto.concepts["New"].definition() == "Kept."

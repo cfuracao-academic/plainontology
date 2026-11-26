@@ -9,7 +9,7 @@ from plainontology.export import to_linkml, to_shacl, to_turtle
 from plainontology.textformat import loads
 
 BASE = "https://example.org/lib#"
-ONTO = loads(f'''\
+ONTO = loads(f"""\
 prefix : <{BASE}>
 
 concept Work
@@ -35,7 +35,7 @@ concept Book
 
 concept Person
   has name : text required
-''')
+""")
 
 
 def test_shacl_shapes_validate_data():
@@ -55,7 +55,13 @@ def test_shacl_shapes_validate_data():
     """
     conforms, _, text = pyshacl.validate(rdflib.Graph().parse(data=bad, format="turtle"), shacl_graph=shapes)
     assert not conforms
-    for problem in ("MinLengthConstraint", "MinInclusiveConstraint", "InConstraint", "PatternConstraint", "MinCountConstraint"):
+    for problem in (
+        "MinLengthConstraint",
+        "MinInclusiveConstraint",
+        "InConstraint",
+        "PatternConstraint",
+        "MinCountConstraint",
+    ):
         assert problem in text
 
 

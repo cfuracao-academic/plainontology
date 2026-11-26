@@ -19,9 +19,11 @@ Everything else in a dump (SET, data, functions) is skipped. Needs ``sqlglot``.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 from .sqlmodel import Column, ForeignKey, Table, declared_length, enum_type, map_type, qualified
 
@@ -30,7 +32,7 @@ try:
     from sqlglot import exp
     from sqlglot.errors import ParseError
 except ImportError:  # pragma: no cover - reported when used
-    sqlglot = None
+    sqlglot = None  # type: ignore[assignment]
 
 logging.getLogger("sqlglot").setLevel(logging.ERROR)
 
@@ -41,27 +43,82 @@ _INSERTS = re.compile(r"^INSERT INTO [^\n]*;\n", re.M)
 _VERSIONED = re.compile(r"/\*!\d*\s*(.*?)\*/", re.S)
 _DELIMITER = re.compile(r"^DELIMITER\s+\S+\s*$", re.M | re.I)
 _IDENT = r'[`"]?([\w$]+)[`"]?'
-_DOMAIN = re.compile(rf"CREATE\s+DOMAIN\s+(?:{_IDENT}\.)?{_IDENT}\s+(?:AS\s+)?([A-Za-z][\w ]*?(?:\([^)]*\))?)\s*(?:DEFAULT|NOT|NULL|CHECK|CONSTRAINT|COLLATE|;)(.*?);",
-                     re.I | re.S)
+_DOMAIN = re.compile(
+    rf"CREATE\s+DOMAIN\s+(?:{_IDENT}\.)?{_IDENT}\s+(?:AS\s+)?([A-Za-z][\w ]*?(?:\([^)]*\))?)\s*"
+    r"(?:DEFAULT|NOT|NULL|CHECK|CONSTRAINT|COLLATE|;)(.*?);",
+    re.I | re.S,
+)
 _DOMAIN_IN = re.compile(r"VALUE\s+IN\s*\(([^)]*)\)", re.I)
 _DOMAIN_REGEX = re.compile(r"VALUE\)?(?:::\w+)?\s*~\s*'((?:[^']|'')*)'", re.I)
 _TRIGGER = re.compile(
     rf"CREATE\s+(?:OR\s+REPLACE\s+)?(?:DEFINER\s*=\s*\S+\s+)?(?:CONSTRAINT\s+)?TRIGGER\s+{_IDENT}\s+"
-    rf"(BEFORE|AFTER|INSTEAD\s+OF)\s+(.+?)\s+ON\s+(?:ONLY\s+)?(?:{_IDENT}\.)?{_IDENT}", re.I | re.S)
+    rf"(BEFORE|AFTER|INSTEAD\s+OF)\s+(.+?)\s+ON\s+(?:ONLY\s+)?(?:{_IDENT}\.)?{_IDENT}",
+    re.I | re.S,
+)
 
-_INTEGER = {"INT", "BIGINT", "SMALLINT", "MEDIUMINT", "TINYINT", "SERIAL", "BIGSERIAL", "SMALLSERIAL", "UINT",
-            "UBIGINT", "USMALLINT", "UMEDIUMINT", "UTINYINT", "INT128", "INT256", "UINT128", "UINT256", "YEAR"}
-_DECIMAL = {"DECIMAL", "DOUBLE", "FLOAT", "MONEY", "SMALLMONEY", "UDECIMAL", "BIGDECIMAL", "DECIMAL32",
-            "DECIMAL64", "DECIMAL128", "DECIMAL256", "UDOUBLE"}
-_DATETIME = {"DATETIME", "DATETIME2", "DATETIME64", "TIMESTAMP", "TIMESTAMPTZ", "TIMESTAMPLTZ", "TIMESTAMPNTZ",
-             "TIMESTAMP_S", "TIMESTAMP_MS", "TIMESTAMP_NS", "SMALLDATETIME", "DATETIMEOFFSET"}
+_INTEGER = {
+    "INT",
+    "BIGINT",
+    "SMALLINT",
+    "MEDIUMINT",
+    "TINYINT",
+    "SERIAL",
+    "BIGSERIAL",
+    "SMALLSERIAL",
+    "UINT",
+    "UBIGINT",
+    "USMALLINT",
+    "UMEDIUMINT",
+    "UTINYINT",
+    "INT128",
+    "INT256",
+    "UINT128",
+    "UINT256",
+    "YEAR",
+}
+_DECIMAL = {
+    "DECIMAL",
+    "DOUBLE",
+    "FLOAT",
+    "MONEY",
+    "SMALLMONEY",
+    "UDECIMAL",
+    "BIGDECIMAL",
+    "DECIMAL32",
+    "DECIMAL64",
+    "DECIMAL128",
+    "DECIMAL256",
+    "UDOUBLE",
+}
+_DATETIME = {
+    "DATETIME",
+    "DATETIME2",
+    "DATETIME64",
+    "TIMESTAMP",
+    "TIMESTAMPTZ",
+    "TIMESTAMPLTZ",
+    "TIMESTAMPNTZ",
+    "TIMESTAMP_S",
+    "TIMESTAMP_MS",
+    "TIMESTAMP_NS",
+    "SMALLDATETIME",
+    "DATETIMEOFFSET",
+}
 _BINARY = {"BINARY", "VARBINARY", "BLOB", "TINYBLOB", "MEDIUMBLOB", "LONGBLOB", "BYTEA", "IMAGE"}
 _SIZED_TEXT = {"VARCHAR", "CHAR", "NVARCHAR", "NCHAR"}
 
 
+def _is(node: Any, name: str) -> bool:
+    """isinstance against a sqlglot class that older or newer versions may not have."""
+    cls = getattr(exp, name, None)
+    return cls is not None and isinstance(node, cls)
+
+
 def _require() -> None:
     if sqlglot is None:
-        raise ValueError("reading PostgreSQL or MySQL schema files needs sqlglot: pip install 'plainontology[postgres]'")
+        raise ValueError(
+            "reading PostgreSQL or MySQL schema files needs sqlglot: pip install 'plainontology[postgres]'"
+        )
 
 
 def _columns(node) -> list[str]:
@@ -83,7 +140,7 @@ class _Reader:
         self.domains: dict[str, tuple[str, list[str] | None, str]] = {}
         self.composites: set[str] = set()
         self.tables: dict[str, Table] = {}
-        self.views: list[tuple[str, object]] = []
+        self.views: list[tuple[str, Any]] = []
         self.table_comments: dict[str, str] = {}
         self.column_comments: dict[tuple[str, str], str] = {}
 
@@ -230,23 +287,26 @@ class _Reader:
         name = self.qual(node.this)
         t = self.table(name)
         for action in node.args.get("actions") or []:
-            if isinstance(action, getattr(exp, "AddConstraint", ())):
+            if _is(action, "AddConstraint"):
                 for item in action.expressions:
                     self.constraint(t, item)
             elif isinstance(action, exp.ColumnDef):  # ADD COLUMN
                 self.put_column(t, self.column(t, action))
-            elif isinstance(action, getattr(exp, "ModifyColumn", ())) and isinstance(action.this, exp.ColumnDef):
+            elif _is(action, "ModifyColumn") and isinstance(action.this, exp.ColumnDef):
                 old = action.args.get("rename_from")  # MySQL CHANGE old new ... / MODIFY
                 self.put_column(t, self.column(t, action.this), old.name if old is not None else None)
             elif isinstance(action, exp.Drop) and (action.args.get("kind") or "").upper() == "COLUMN":
                 for target in action.args.get("tables") or []:
                     self.drop_column(t, target.name)
-            elif isinstance(action, getattr(exp, "RenameColumn", ())):
+            elif _is(action, "RenameColumn"):
                 self.rename_column(t, action.this.name, action.args["to"].name)
-            elif isinstance(action, getattr(exp, "AlterRename", ())) and action.this is not None:
+            elif _is(action, "AlterRename") and action.this is not None:
                 schema = node.this.args.get("db")
-                new = qualified(schema.name if schema is not None and self.dialect != "mysql" else None,
-                                action.this.name, self.defaults)
+                new = qualified(
+                    schema.name if schema is not None and self.dialect != "mysql" else None,
+                    action.this.name,
+                    self.defaults,
+                )
                 self.rename_table(name, new)
                 t = self.tables[new]
             else:
@@ -261,7 +321,7 @@ class _Reader:
                 continue
             t.columns.append(self.column(t, item))
         properties = node.args.get("properties")
-        for prop in (properties.expressions if properties else []):
+        for prop in properties.expressions if properties else []:
             if isinstance(prop, exp.SchemaCommentProperty) and prop.this is not None:
                 t.comment = prop.this.name
 
@@ -282,7 +342,9 @@ class _Reader:
             elif kind == "INDEX" and node.args.get("unique") and isinstance(node.this, exp.Index):
                 index = node.this
                 params = index.args.get("params")
-                cols = [c.this.name for c in (params.args.get("columns") if params else None) or [] if hasattr(c, "this")]
+                cols = [
+                    c.this.name for c in (params.args.get("columns") if params else None) or [] if hasattr(c, "this")
+                ]
                 table = index.args.get("table")
                 if table is not None and cols:
                     t = self.table(self.qual(table))
@@ -290,7 +352,7 @@ class _Reader:
                         t.unique.add(cols[0])
                     else:
                         t.unique_sets.append(cols)
-        elif isinstance(node, getattr(exp, "Alter", getattr(exp, "AlterTable", ()))):
+        elif _is(node, "Alter") or _is(node, "AlterTable"):
             self.alter(node)
         elif isinstance(node, exp.Comment) and node.args.get("expression") is not None:
             kind = (node.args.get("kind") or "").upper()
@@ -307,7 +369,7 @@ class _Reader:
     def resolve_view(self, name: str, query) -> Table:
         view = Table(name, kind="view")
         select = query
-        while isinstance(select, getattr(exp, "SetOperation", exp.Union)):
+        while _is(select, "SetOperation") or isinstance(select, exp.Union):
             select = select.this
         if not isinstance(select, exp.Select):
             return view
@@ -325,7 +387,7 @@ class _Reader:
             if isinstance(proj, exp.Star) or (isinstance(proj, exp.Column) and isinstance(proj.this, exp.Star)):
                 refs = [aliases.get(proj.table)] if isinstance(proj, exp.Column) and proj.table else sources
                 for ref in refs:
-                    for col in (self.tables[ref].columns if ref in self.tables else []):
+                    for col in self.tables[ref].columns if ref in self.tables else []:
                         view.columns.append(Column(col.name, col.datatype, many=col.many, max_length=col.max_length))
                 continue
             inner = proj.this if isinstance(proj, exp.Alias) else proj
@@ -344,8 +406,11 @@ class _Reader:
         for m in _DOMAIN.finditer(sql):
             values = _DOMAIN_IN.search(m[4] or "")
             regex = _DOMAIN_REGEX.search(m[4] or "")
-            self.domains[m[2].lower()] = (m[3].strip(), _strip_quotes(values[1]) if values else None,
-                                          regex[1].replace("''", "'") if regex else "")
+            self.domains[m[2].lower()] = (
+                m[3].strip(),
+                _strip_quotes(values[1]) if values else None,
+                regex[1].replace("''", "'") if regex else "",
+            )
 
     def triggers(self, sql: str) -> None:
         seen = set()
@@ -356,7 +421,9 @@ class _Reader:
                 continue
             seen.add((table_name, name))
             event_list = [e.strip().split()[0].upper() for e in re.split(r"\s+OR\s+", events, flags=re.I) if e.strip()]
-            self.tables[table_name].triggers.append(f"{name}: {' '.join(timing.upper().split())} {', '.join(event_list)}")
+            self.tables[table_name].triggers.append(
+                f"{name}: {' '.join(timing.upper().split())} {', '.join(event_list)}"
+            )
 
     def apply_comments(self) -> None:
         for name, text in self.table_comments.items():
@@ -381,12 +448,12 @@ class _Reader:
             for chunk in re.split(r";\s*\n", sql):
                 if not chunk.strip():
                     continue
-                try:
+                with contextlib.suppress(ParseError):
                     statements += sqlglot.parse(chunk, read=self.dialect)
-                except ParseError:
-                    pass
-        types_first = sorted((s for s in statements if s is not None), key=lambda s: not (
-            isinstance(s, exp.Create) and (s.args.get("kind") or "").upper() == "TYPE"))
+        types_first = sorted(
+            (s for s in statements if s is not None),
+            key=lambda s: not (isinstance(s, exp.Create) and (s.args.get("kind") or "").upper() == "TYPE"),
+        )
         for node in types_first:
             self.statement(node)
         for name, query in self.views:

@@ -134,9 +134,9 @@ def _rules(attr: dict, prop: Statement) -> None:
 
 
 def to_linkml(onto: Ontology, name: str = "ontology", base: str | None = None) -> str:
-    base = base or onto.prefixes.get("") or DEFAULT_BASE
+    base_iri: str = base or onto.prefixes.get("") or DEFAULT_BASE
     schema_name = safe_name(name).replace(".", "_")
-    prefixes = {"linkml": "https://w3id.org/linkml/", schema_name: base}
+    prefixes: dict[str, str] = {"linkml": "https://w3id.org/linkml/", schema_name: base_iri}
     for p, iri in onto.prefixes.items():
         if p:
             prefixes[p] = iri
@@ -166,8 +166,8 @@ def to_linkml(onto: Ontology, name: str = "ontology", base: str | None = None) -
         mappings = [s.name for s in c.all("same_as")]
         for m in mappings:
             prefix = m.partition(":")[0]
-            if prefix not in prefixes and (iri := onto.prefix_iri(prefix)):
-                prefixes[prefix] = iri
+            if prefix not in prefixes and (mapped := onto.prefix_iri(prefix)):
+                prefixes[prefix] = mapped
         if mappings:
             cls["exact_mappings"] = mappings
 
@@ -212,7 +212,7 @@ def to_linkml(onto: Ontology, name: str = "ontology", base: str | None = None) -
         classes[name_]["mixin"] = True
 
     doc: dict = {
-        "id": base.rstrip("#/") or base,
+        "id": base_iri.rstrip("#/") or base_iri,
         "name": schema_name,
         "description": "Exported by PlainOntology.",
         "prefixes": prefixes,

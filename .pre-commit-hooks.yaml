@@ -1,0 +1,23 @@
+# Hooks for https://pre-commit.com. Add to your .pre-commit-config.yaml:
+#
+#   - repo: https://github.com/cfuracao-academic/plainontology
+#     rev: v0.2.0
+#     hooks:
+#       - id: plainonto-check
+#       - id: plainonto-drift
+#         additional_dependencies: ["plainontology[postgres]"]   # for postgres: sources
+#
+- id: plainonto-check
+  name: PlainOntology check
+  description: Check .onto files for duplicate lines, unknown targets, misplaced rules and pending proposals.
+  entry: plainonto check
+  language: python
+  files: \.onto$
+
+- id: plainonto-drift
+  name: PlainOntology drift
+  description: Fail when an .onto file no longer matches its sources (run plainonto refresh to fix).
+  entry: plainonto drift
+  language: python
+  files: \.onto$
+  pass_filenames: true

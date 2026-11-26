@@ -67,7 +67,10 @@ def enum_type(values: list[str]) -> str:
     return f"enum({'|'.join(cleaned)})" if cleaned else "text"
 
 
-_LENGTH_RE = re.compile(r"^\s*(?:N?VARCHAR2?|N?CHAR|CHARACTER(?:\s+VARYING)?|VARYING\s+CHARACTER|NATIONAL\s+CHAR\w*)\s*\(\s*(\d+)\s*\)", re.I)
+_LENGTH_RE = re.compile(
+    r"^\s*(?:N?VARCHAR2?|N?CHAR|CHARACTER(?:\s+VARYING)?|VARYING\s+CHARACTER|NATIONAL\s+CHAR\w*)\s*\(\s*(\d+)\s*\)",
+    re.I,
+)
 
 
 def declared_length(declared: str) -> int | None:
@@ -206,18 +209,28 @@ def tables_to_concepts(tables: list[Table], label: str) -> list[Concept]:
                 flags.append("unique")
             if col.many:
                 flags.append("many")
-            line = Statement("has", name=prop_name[col.name], target=col.datatype, flags=tuple(flags),
-                             value=col.comment, tag=AUTO)
+            line = Statement(
+                "has", name=prop_name[col.name], target=col.datatype, flags=tuple(flags), value=col.comment, tag=AUTO
+            )
             line.children = _children(col, rules.get(col.name, {}))
             concept.add(line)
         for fk in fks:
             target = concept_name(fk.table)
             rel = prop_name[fk.columns[0]] if len(fk.columns) == 1 else target[:1].lower() + target[1:]
             required = all((c := t.column(n)) is not None and (c.not_null or n in t.primary_key) for n in fk.columns)
-            comment = t.column(fk.columns[0]).comment if len(fk.columns) == 1 and t.column(fk.columns[0]) else ""
+            first = t.column(fk.columns[0]) if len(fk.columns) == 1 else None
+            comment = first.comment if first is not None else ""
             detail = f"fk {t.name}.{','.join(fk.columns)}"
-            concept.add(Statement("rel", name=rel, target=target, flags=("required",) if required else (),
-                                  value=comment, tag=Tag("auto", detail)))
+            concept.add(
+                Statement(
+                    "rel",
+                    name=rel,
+                    target=target,
+                    flags=("required",) if required else (),
+                    value=comment,
+                    tag=Tag("auto", detail),
+                )
+            )
         sets = [list(u) for u in t.unique_sets if len(u) > 1]
         if len(t.primary_key) > 1:
             sets.insert(0, list(t.primary_key))
@@ -234,7 +247,10 @@ def tables_to_concepts(tables: list[Table], label: str) -> list[Concept]:
         if source is None or other.table not in by_name:
             continue
         name = plural(relation_name(other.columns[0]))
-        source.add(Statement("rel", name=name, target=concept_name(other.table), flags=("many",),
-                             tag=Tag("auto", f"via {t.name}")))
+        source.add(
+            Statement(
+                "rel", name=name, target=concept_name(other.table), flags=("many",), tag=Tag("auto", f"via {t.name}")
+            )
+        )
 
     return list(concepts.values())

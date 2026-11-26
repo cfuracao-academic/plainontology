@@ -21,8 +21,24 @@ class Issue:
         return f"{self.level}: {self.concept}: {self.message}"
 
 
-KNOWN_FORMATS = {"email", "idn-email", "uri", "uri-reference", "iri", "iri-reference", "uuid", "hostname",
-                 "idn-hostname", "ipv4", "ipv6", "time", "duration", "uri-template", "json-pointer", "regex"}
+KNOWN_FORMATS = {
+    "email",
+    "idn-email",
+    "uri",
+    "uri-reference",
+    "iri",
+    "iri-reference",
+    "uuid",
+    "hostname",
+    "idn-hostname",
+    "ipv4",
+    "ipv6",
+    "time",
+    "duration",
+    "uri-template",
+    "json-pointer",
+    "regex",
+}
 _NUMERIC = ("integer", "decimal")
 
 
@@ -41,7 +57,9 @@ def _check_children(c: Concept, prop: Statement, issues: list[Issue]) -> None:
             continue
         key = child.key()
         if key in seen:
-            issues.append(Issue("error", where, f"two lines for the same thing: '{seen[key].body()}' and '{child.body()}'"))
+            issues.append(
+                Issue("error", where, f"two lines for the same thing: '{seen[key].body()}' and '{child.body()}'")
+            )
         seen[key] = child
         if child.kind in RULE_KINDS and prop.kind == "rel":
             issues.append(Issue("warning", where, f"'{child.kind}' rules apply to values, not to relations"))
@@ -68,21 +86,35 @@ def check(onto: Ontology) -> list[Issue]:
                 continue
             key = s.key()
             if key in seen:
-                issues.append(Issue("error", c.name, f"two lines for the same thing: '{seen[key].body()}' and '{s.body()}'"))
+                issues.append(
+                    Issue("error", c.name, f"two lines for the same thing: '{seen[key].body()}' and '{s.body()}'")
+                )
             seen[key] = s
             if s.kind == "has" and s.target not in DATATYPES and enum_values(s.target) is None:
-                issues.append(Issue("warning", c.name, f"unknown datatype '{s.target}' (use one of {', '.join(DATATYPES)} or enum(a|b))"))
+                issues.append(
+                    Issue(
+                        "warning",
+                        c.name,
+                        f"unknown datatype '{s.target}' (use one of {', '.join(DATATYPES)} or enum(a|b))",
+                    )
+                )
             if s.kind in ("rel", "is_a"):
                 target = s.target if s.kind == "rel" else s.name
                 if not _resolvable(target, onto):
-                    issues.append(Issue("warning", c.name, f"'{target}' is not a concept in this file and not a known prefix"))
+                    issues.append(
+                        Issue("warning", c.name, f"'{target}' is not a concept in this file and not a known prefix")
+                    )
             if s.kind == "same_as" and not _resolvable(s.name, onto):
                 prefix = s.name.partition(":")[0]
-                issues.append(Issue("warning", c.name, f"prefix '{prefix}' is not declared; add a line: prefix {prefix}: <IRI>"))
+                issues.append(
+                    Issue("warning", c.name, f"prefix '{prefix}' is not declared; add a line: prefix {prefix}: <IRI>")
+                )
             if s.kind == "unique":
                 missing = [col for col in unique_columns(s.name) if col not in props]
                 if missing:
-                    issues.append(Issue("warning", c.name, f"unique ({s.name}) names unknown properties: {', '.join(missing)}"))
+                    issues.append(
+                        Issue("warning", c.name, f"unique ({s.name}) names unknown properties: {', '.join(missing)}")
+                    )
             if s.is_property:
                 _check_children(c, s, issues)
             if s.is_proposed:
@@ -97,7 +129,9 @@ def check(onto: Ontology) -> list[Issue]:
 _MAX_DEPTH = 6
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _URI = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:\S+$")
-_HOST = re.compile(r"^(?=.{1,253}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$")
+_HOST = re.compile(
+    r"^(?=.{1,253}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+)
 
 
 def _format_ok(fmt: str, value: str) -> bool:
@@ -129,7 +163,10 @@ def _rules(where: str, s: Statement, value: Any) -> list[str]:
         if rule.kind in ("min", "max") and isinstance(value, (int, float)) and not isinstance(value, bool):
             bound = float(rule.value)
             if (rule.kind == "min" and value < bound) or (rule.kind == "max" and value > bound):
-                out.append(f"{where}: {value} is {'below the minimum' if rule.kind == 'min' else 'above the maximum'} {rule.value}")
+                out.append(
+                    f"{where}: {value} is {'below the minimum' if rule.kind == 'min' else 'above the maximum'} "
+                    f"{rule.value}"
+                )
         elif rule.kind == "length" and isinstance(value, str):
             low, high = length_bounds(rule.value)
             if (low is not None and len(value) < low) or (high is not None and len(value) > high):
@@ -145,7 +182,9 @@ def _subtypes(onto: Ontology, name: str) -> list[str]:
     """``name`` and every concept that is_a it, directly or indirectly."""
     out = [name]
     for n in out:
-        out.extend(c.name for c in onto.concepts.values() if c.name not in out and any(s.name == n for s in c.all("is_a")))
+        out.extend(
+            c.name for c in onto.concepts.values() if c.name not in out and any(s.name == n for s in c.all("is_a"))
+        )
     return out
 
 

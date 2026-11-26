@@ -11,9 +11,22 @@ def words(text: str) -> list[str]:
     return _WORD_RE.findall(text)
 
 
-_IRREGULAR = {"people": "person", "children": "child", "men": "man", "women": "woman", "mice": "mouse",
-              "geese": "goose", "feet": "foot", "teeth": "tooth", "indices": "index", "criteria": "criterion",
-              "analyses": "analysis", "statuses": "status", "series": "series", "species": "species"}
+_IRREGULAR = {
+    "people": "person",
+    "children": "child",
+    "men": "man",
+    "women": "woman",
+    "mice": "mouse",
+    "geese": "goose",
+    "feet": "foot",
+    "teeth": "tooth",
+    "indices": "index",
+    "criteria": "criterion",
+    "analyses": "analysis",
+    "statuses": "status",
+    "series": "series",
+    "species": "species",
+}
 
 
 def singular(word: str) -> str:

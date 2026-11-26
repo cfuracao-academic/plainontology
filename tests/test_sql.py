@@ -31,27 +31,47 @@ def _structure(concepts):
     return {c.name: [f"{s.kind} {s.name} {s.target} {' '.join(s.flags)}" for s in c.properties()] for c in concepts}
 
 
-@pytest.mark.parametrize("declared,expected", [
-    ("character varying(13)", "text"), ("timestamp with time zone", "datetime"), ("time without time zone", "text"),
-    ("bigserial", "integer"), ("numeric(10,2)", "decimal"), ("double precision", "decimal"), ("jsonb", "json"),
-    ("bytea", "binary"), ("tinyint(1)", "boolean"), ("tinyint(4)", "integer"), ("interval", "text"),
-    ("point", "text"), ("uuid", "text"), ("longblob", "binary"), ("datetime(6)", "datetime"), ("bit(1)", "boolean"),
-])
+@pytest.mark.parametrize(
+    "declared,expected",
+    [
+        ("character varying(13)", "text"),
+        ("timestamp with time zone", "datetime"),
+        ("time without time zone", "text"),
+        ("bigserial", "integer"),
+        ("numeric(10,2)", "decimal"),
+        ("double precision", "decimal"),
+        ("jsonb", "json"),
+        ("bytea", "binary"),
+        ("tinyint(1)", "boolean"),
+        ("tinyint(4)", "integer"),
+        ("interval", "text"),
+        ("point", "text"),
+        ("uuid", "text"),
+        ("longblob", "binary"),
+        ("datetime(6)", "datetime"),
+        ("bit(1)", "boolean"),
+    ],
+)
 def test_map_type(declared, expected):
     assert map_type(declared) == expected
 
 
-@pytest.mark.parametrize("sql,expected", [
-    ("pages > 0", [("min", "pages", 0, True)]),
-    ("year BETWEEN 1900 AND 2100", [("min", "year", 1900, False), ("max", "year", 2100, False)]),
-    ("((year >= 1900) AND (year <= 2100))", [("min", "year", 1900, False), ("max", "year", 2100, False)]),
-    ("status IN ('a', 'b')", [("enum", "status", ["a", "b"], False)]),
-    ("((status)::text = ANY ((ARRAY['a'::character varying, 'b'::character varying])::text[]))",
-     [("enum", "status", ["a", "b"], False)]),
-    ("char_length(code) <= 20", [("length_max", "code", 20, False)]),
-    ("((code)::text ~ '^C-[0-9]+$'::text)", [("pattern", "code", "^C-[0-9]+$", False)]),
-    ("0 < price", [("min", "price", 0, True)]),
-])
+@pytest.mark.parametrize(
+    "sql,expected",
+    [
+        ("pages > 0", [("min", "pages", 0, True)]),
+        ("year BETWEEN 1900 AND 2100", [("min", "year", 1900, False), ("max", "year", 2100, False)]),
+        ("((year >= 1900) AND (year <= 2100))", [("min", "year", 1900, False), ("max", "year", 2100, False)]),
+        ("status IN ('a', 'b')", [("enum", "status", ["a", "b"], False)]),
+        (
+            "((status)::text = ANY ((ARRAY['a'::character varying, 'b'::character varying])::text[]))",
+            [("enum", "status", ["a", "b"], False)],
+        ),
+        ("char_length(code) <= 20", [("length_max", "code", 20, False)]),
+        ("((code)::text ~ '^C-[0-9]+$'::text)", [("pattern", "code", "^C-[0-9]+$", False)]),
+        ("0 < price", [("min", "price", 0, True)]),
+    ],
+)
 def test_check_analysis(sql, expected):
     assert [(f.kind, f.column, f.value, f.exclusive) for f in analyse(sql, "postgres")] == expected
 
@@ -76,11 +96,17 @@ def test_postgres_dump():
     assert award[:3] == ["has year : integer required", "  min 1900", "  max 2100"]
     assert "unique (book, award)" in award
     loan = concepts["Loan"]
-    assert loan[loan.index('has member : text required "Library card number."') + 2] == '  pattern "^C-[0-9]+$"'  # domain
+    assert (
+        loan[loan.index('has member : text required "Library card number."') + 2] == '  pattern "^C-[0-9]+$"'
+    )  # domain
     assert "has status : enum(open|returned|lost) required" in loan  # CREATE TYPE ... AS ENUM
     assert 'note "trigger loans_touch: BEFORE INSERT, UPDATE"' in loan
     assert any(line.startswith('note "check: ') for line in loan)  # a check that is not a rule
-    assert concepts["ArchiveLoan"] == ["has id : integer key", "has closed_at : datetime required", "book -> Book required"]
+    assert concepts["ArchiveLoan"] == [
+        "has id : integer key",
+        "has closed_at : datetime required",
+        "book -> Book required",
+    ]
     view = concepts["OpenLoan"]
     assert view[:2] == ['definition "Loans not yet returned."', 'note "database view (read-only)"']
     assert "has book_title : text" in view
@@ -124,8 +150,14 @@ def test_sqlite_checks_views_and_triggers():
 
     concepts = _lines(tables_to_concepts(read_tables(db), "sqlite"))
     assert concepts["Item"] == [
-        "has id : integer key", "has kind : enum(a|b) required", "has qty : integer", "  min 0",
-        "has code : text", "  length ..8", "unique (kind, code)", 'note "trigger items_log: AFTER INSERT"',
+        "has id : integer key",
+        "has kind : enum(a|b) required",
+        "has qty : integer",
+        "  min 0",
+        "has code : text",
+        "  length ..8",
+        "unique (kind, code)",
+        'note "trigger items_log: AFTER INSERT"',
     ]
     assert concepts["Cheap"][0] == 'note "database view (read-only)"'
 
@@ -192,10 +224,20 @@ def test_alter_table_migrations():
     ALTER TABLE public.authors RENAME TO writers;
     """
     concepts = _lines(tables_to_concepts(tables_from_ddl(ddl, "postgres"), "postgres"))
-    assert concepts["Book"] == ["has id : integer key", "has headline : text required", "has edition : integer",
-                                "  min 1", "author -> Writer"]
+    assert concepts["Book"] == [
+        "has id : integer key",
+        "has headline : text required",
+        "has edition : integer",
+        "  min 1",
+        "author -> Writer",
+    ]
     assert "Writer" in concepts and "Author" not in concepts
-    mysql = "CREATE TABLE `books` (`id` int PRIMARY KEY, `title` varchar(30) NOT NULL);\n" \
-            "ALTER TABLE `books` CHANGE `title` `headline` varchar(300) NOT NULL;"
+    mysql = (
+        "CREATE TABLE `books` (`id` int PRIMARY KEY, `title` varchar(30) NOT NULL);\n"
+        "ALTER TABLE `books` CHANGE `title` `headline` varchar(300) NOT NULL;"
+    )
     assert _lines(tables_to_concepts(tables_from_ddl(mysql, "mysql"), "mysql"))["Book"] == [
-        "has id : integer key", "has headline : text required", "  length ..300"]
+        "has id : integer key",
+        "has headline : text required",
+        "  length ..300",
+    ]

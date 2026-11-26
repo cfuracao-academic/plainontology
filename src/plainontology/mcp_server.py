@@ -28,12 +28,7 @@ INSTRUCTIONS = (
 
 
 def _incoming(onto: Ontology, name: str) -> list[str]:
-    return [
-        f"{c.name}.{s.name} -> {name}"
-        for c in onto.concepts.values()
-        for s in c.all("rel")
-        if s.target == name
-    ]
+    return [f"{c.name}.{s.name} -> {name}" for c in onto.concepts.values() for s in c.all("rel") if s.target == name]
 
 
 def describe(onto: Ontology, concept: Concept) -> str:
@@ -80,9 +75,7 @@ def build_server(path: Path, allow_proposals: bool = False) -> MCPServer:
         onto = load(path)
         if not onto.concepts:
             return "The ontology has no concepts yet."
-        return "\n".join(
-            c.name + (f": {c.definition()}" if c.definition() else "") for c in onto.concepts.values()
-        )
+        return "\n".join(c.name + (f": {c.definition()}" if c.definition() else "") for c in onto.concepts.values())
 
     @server.tool()
     def describe_concept(name: str) -> str:
@@ -143,8 +136,9 @@ def build_server(path: Path, allow_proposals: bool = False) -> MCPServer:
             save(path, onto)
             return f"Proposed for {target.name}: {statement.render()}"
 
-    @server.resource("ontology://file", name="ontology", mime_type="text/plain",
-                     description="The whole ontology file as plain text.")
+    @server.resource(
+        "ontology://file", name="ontology", mime_type="text/plain", description="The whole ontology file as plain text."
+    )
     def ontology_file() -> str:
         return path.read_text(encoding="utf-8")
 

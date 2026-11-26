@@ -34,27 +34,51 @@ def _cmd_refresh(args) -> int:
     return 0
 
 
+def _each(files: list[str], run) -> int:
+    """Run ``run(path)`` for every file, with a heading when there are several.
+    Returns the worst exit code (2 for a file that cannot be read)."""
+    worst = 0
+    for path in files:
+        if len(files) > 1:
+            print(f"== {path}")
+        try:
+            worst = max(worst, run(Path(path)))
+        except (ParseError, ValueError, FileNotFoundError) as exc:
+            print(f"plainonto: {exc}", file=sys.stderr)
+            worst = 2
+    return worst
+
+
 def _cmd_drift(args) -> int:
-    _, _, report = compare(Path(args.file), renames=not args.no_renames)
-    print(report.render())
-    return 1 if report.has_drift else 0
+    def one(path: Path) -> int:
+        _, _, report = compare(path, renames=not args.no_renames)
+        print(report.render())
+        return 1 if report.has_drift else 0
+
+    return _each(args.files, one)
 
 
 def _cmd_check(args) -> int:
-    issues = check(load(args.file))
-    for issue in issues:
-        print(issue.render())
-    errors = [i for i in issues if i.level == "error" or (args.strict and i.level == "warning")]
-    if not issues:
-        print("No issues.")
-    return 1 if errors else 0
+    def one(path: Path) -> int:
+        issues = check(load(path))
+        for issue in issues:
+            print(issue.render())
+        if not issues:
+            print("No issues.")
+        errors = [i for i in issues if i.level == "error" or (args.strict and i.level == "warning")]
+        return 1 if errors else 0
+
+    return _each(args.files, one)
 
 
 def _cmd_export(args) -> int:
     onto = load(args.file)
     name = Path(args.file).stem
-    text = {"turtle": lambda: to_turtle(onto, args.base), "shacl": lambda: to_shacl(onto, args.base),
-            "linkml": lambda: to_linkml(onto, name, args.base)}[args.to]()
+    text = {
+        "turtle": lambda: to_turtle(onto, args.base),
+        "shacl": lambda: to_shacl(onto, args.base),
+        "linkml": lambda: to_linkml(onto, name, args.base),
+    }[args.to]()
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8", newline="\n")
         print(f"Wrote {args.output}")
@@ -110,8 +134,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("init", help="create a file from one or more sources")
     s.add_argument("file")
-    s.add_argument("--from", dest="sources", action="append", required=True, metavar="KIND:PATH",
-                   help="sqlite:db-or-.sql, jsonschema:file.json or tools:tools.json (repeatable)")
+    s.add_argument(
+        "--from",
+        dest="sources",
+        action="append",
+        required=True,
+        metavar="KIND:PATH",
+        help="sqlite:db-or-.sql, jsonschema:file.json or tools:tools.json (repeatable)",
+    )
     s.add_argument("--force", action="store_true", help="overwrite an existing file")
     s.set_defaults(func=_cmd_init)
 
@@ -122,12 +152,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=_cmd_refresh)
 
     s = sub.add_parser("drift", help="report what changed in the sources without writing (exit 1 on drift)")
-    s.add_argument("file")
+    s.add_argument("files", nargs="+", metavar="file")
     s.add_argument("--no-renames", action="store_true", help=no_renames)
     s.set_defaults(func=_cmd_drift)
 
-    s = sub.add_parser("check", help="check the file for duplicates, unknown targets and pending proposals")
-    s.add_argument("file")
+    s = sub.add_parser(
+        "check", help="check files for duplicates, unknown targets, misplaced rules and pending proposals"
+    )
+    s.add_argument("files", nargs="+", metavar="file")
     s.add_argument("--strict", action="store_true", help="fail on warnings too")
     s.set_defaults(func=_cmd_check)
 
@@ -135,7 +167,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("file")
     s.add_argument("--to", choices=["turtle", "shacl", "linkml"], required=True)
     s.add_argument("-o", "--output")
-    s.add_argument("--base", help="base IRI (default: the file's 'prefix :' line, else https://example.org/plainontology#)")
+    s.add_argument(
+        "--base", help="base IRI (default: the file's 'prefix :' line, else https://example.org/plainontology#)"
+    )
     s.set_defaults(func=_cmd_export)
 
     s = sub.add_parser("validate", help="check JSON records against a concept (exit 1 on problems)")
@@ -152,8 +186,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("mcp", help="serve the file to AI agents over MCP (stdio)")
     s.add_argument("file")
-    s.add_argument("--allow-proposals", action="store_true",
-                   help="let agents add [proposed] lines for a person to review")
+    s.add_argument(
+        "--allow-proposals", action="store_true", help="let agents add [proposed] lines for a person to review"
+    )
     s.set_defaults(func=_cmd_mcp)
     return p
 

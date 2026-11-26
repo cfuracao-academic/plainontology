@@ -18,8 +18,12 @@ XSD = {
     "binary": "xsd:base64Binary",
 }
 
-TEXT_PREDICATES = {"label": "skos:prefLabel", "definition": "skos:definition", "synonym": "skos:altLabel",
-                   "note": "skos:note"}
+TEXT_PREDICATES = {
+    "label": "skos:prefLabel",
+    "definition": "skos:definition",
+    "synonym": "skos:altLabel",
+    "note": "skos:note",
+}
 
 
 def literal(text: str, lang: str = "") -> str:

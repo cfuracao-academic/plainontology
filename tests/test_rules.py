@@ -4,7 +4,7 @@ from plainontology.check import check, validate_record
 from plainontology.merge import merge
 from plainontology.textformat import loads
 
-ONTO = loads('''\
+ONTO = loads("""\
 concept Reader
   has card : text required
     length 4..10
@@ -28,12 +28,17 @@ concept Book
 concept Film
   is_a Item
   has minutes : integer required
-''')
+""")
 
 
 def test_valid_record():
-    record = {"card": "C-123", "email": "a@example.org", "age": 30, "site": "https://example.org",
-              "favourite": {"minutes": 120}}
+    record = {
+        "card": "C-123",
+        "email": "a@example.org",
+        "age": 30,
+        "site": "https://example.org",
+        "favourite": {"minutes": 120},
+    }
     assert validate_record(ONTO, "Reader", record) == []
 
 
@@ -53,7 +58,9 @@ def test_nested_object_may_match_any_subtype():
 
 
 def test_check_flags_misplaced_rules():
-    onto = loads("concept A\n  has n : text\n    min 1\n  has m : integer\n    min 5\n    max 1\n  b -> A\n    pattern \"x\"\n")
+    onto = loads(
+        'concept A\n  has n : text\n    min 1\n  has m : integer\n    min 5\n    max 1\n  b -> A\n    pattern "x"\n'
+    )
     messages = [i.message for i in check(onto)]
     assert any("needs a numeric property" in m for m in messages)
     assert any("min 5 is greater than max 1" in m for m in messages)
@@ -61,7 +68,7 @@ def test_check_flags_misplaced_rules():
 
 
 def test_refresh_keeps_your_rules_and_updates_extracted_ones():
-    current = loads("concept A [auto: x]\n  has code : text [auto]\n    length ..8 [auto]\n    pattern \"^[A-Z]+$\"\n")
+    current = loads('concept A [auto: x]\n  has code : text [auto]\n    length ..8 [auto]\n    pattern "^[A-Z]+$"\n')
     fresh = loads("concept A [auto: x]\n  has code : text [auto]\n    length ..12 [auto]\n")
     merged, report = merge(current, fresh)
     children = [c.render() for c in merged.concepts["A"].prop("code").children]

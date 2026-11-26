@@ -24,6 +24,20 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest -q
 
+  quality:
+    # Lint, formatting, types and a coverage floor.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: ruff format --check src tests
+      - run: mypy
+      - run: pytest -q --cov --cov-report=term --cov-fail-under=85
+
   live-databases:
     # Loads the example dumps into real servers and checks the live reader
     # returns exactly what the dump reader returns.
@@ -72,6 +86,38 @@ jobs:
           gen-json-schema all.yaml > /dev/null
           gen-pydantic all.yaml > /dev/null
           linkml-lint --validate-only all.yaml
+
+  action-and-hooks:
+    # Runs this repository's GitHub Action and pre-commit hooks the way users will.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: clean
+        uses: ./
+        with:
+          file: examples/library.onto
+          install: .
+      - name: The example has no drift
+        run: test "${{ steps.clean.outputs.drift }}" = "false"
+      - name: Change a source
+        run: echo "CREATE TABLE members (id INTEGER PRIMARY KEY);" >> examples/library.sql
+      - id: drifted
+        uses: ./
+        with:
+          file: examples/library.onto
+          install: .
+          fail-on-drift: "false"
+      - name: The change is reported
+        env:
+          DRIFT: ${{ steps.drifted.outputs.drift }}
+          REPORT: ${{ steps.drifted.outputs.report }}
+        run: |
+          test "$DRIFT" = "true"
+          echo "$REPORT" | grep -q "concept Member"
+      - run: git checkout examples/library.sql
+      - run: pip install pre-commit
+      - run: pre-commit try-repo . plainonto-check --files examples/library.onto
+      - run: pre-commit try-repo . plainonto-drift --files examples/library.onto
 
   example-drift:
     # The example file must match its sources, as a demo of using drift as a CI gate.

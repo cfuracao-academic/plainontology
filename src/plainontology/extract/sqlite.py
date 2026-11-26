@@ -76,7 +76,7 @@ def read_tables(con: sqlite3.Connection) -> list[Table]:
     try:
         from .sqldump import _Reader, sqlglot
     except ImportError:  # pragma: no cover
-        sqlglot = None
+        sqlglot = None  # type: ignore[assignment]
     if sqlglot is not None:
         reader = _Reader("sqlite")
         reader.read(";\n".join(sql for kind, _n, sql in rows if sql and kind in ("table", "trigger")) + ";\n")

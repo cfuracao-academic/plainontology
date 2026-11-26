@@ -34,10 +34,20 @@ def test_naming():
     assert relation_name("parentId") == "parent"
 
 
-@pytest.mark.parametrize("declared,expected", [
-    ("INTEGER", "integer"), ("VARCHAR(13)", "text"), ("TIMESTAMP", "datetime"), ("DATE", "date"),
-    ("BOOLEAN", "boolean"), ("NUMERIC(10,2)", "decimal"), ("BLOB", "binary"), ("", "any"), ("JSON", "json"),
-])
+@pytest.mark.parametrize(
+    "declared,expected",
+    [
+        ("INTEGER", "integer"),
+        ("VARCHAR(13)", "text"),
+        ("TIMESTAMP", "datetime"),
+        ("DATE", "date"),
+        ("BOOLEAN", "boolean"),
+        ("NUMERIC(10,2)", "decimal"),
+        ("BLOB", "binary"),
+        ("", "any"),
+        ("JSON", "json"),
+    ],
+)
 def test_sqlite_datatypes(declared, expected):
     assert datatype(declared) == expected
 
@@ -83,8 +93,16 @@ def test_tool_formats(tmp_path, shape):
     schema = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
     tool = {
         "anthropic": {"name": "get_weather", "description": "Weather now.", "input_schema": schema},
-        "openai_chat": {"type": "function", "function": {"name": "get_weather", "description": "Weather now.", "parameters": schema}},
-        "openai_responses": {"type": "function", "name": "get_weather", "description": "Weather now.", "parameters": schema},
+        "openai_chat": {
+            "type": "function",
+            "function": {"name": "get_weather", "description": "Weather now.", "parameters": schema},
+        },
+        "openai_responses": {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Weather now.",
+            "parameters": schema,
+        },
         "mcp": {"name": "get_weather", "description": "Weather now.", "inputSchema": schema},
     }[shape]
     doc = {"tools": [tool]} if shape == "mcp" else [tool]

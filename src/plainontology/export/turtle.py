@@ -29,7 +29,7 @@ def _text_pairs(statements: list[Statement]) -> list[tuple[str, str]]:
 
 
 def _concept(n: Namer, c: Concept) -> list[str]:
-    pairs = [("a", "owl:Class"), ("rdfs:label", literal(c.name))] + _text_pairs(c.statements)
+    pairs = [("a", "owl:Class"), ("rdfs:label", literal(c.name)), *_text_pairs(c.statements)]
     for s in c.statements:
         if s.kind == "is_a" and (r := n.ref(s.name)):
             pairs.append(("rdfs:subClassOf", r))
@@ -38,11 +38,13 @@ def _concept(n: Namer, c: Concept) -> list[str]:
     own = {s.name for s in c.properties()}
     for s in c.properties():
         if "required" in s.flags or "key" in s.flags:
-            pairs.append((
-                "rdfs:subClassOf",
-                f"[ a owl:Restriction ; owl:onProperty {n.prop(c.name, s.name)} ; "
-                f"owl:minCardinality \"1\"^^xsd:nonNegativeInteger ]",
-            ))
+            pairs.append(
+                (
+                    "rdfs:subClassOf",
+                    f"[ a owl:Restriction ; owl:onProperty {n.prop(c.name, s.name)} ; "
+                    f'owl:minCardinality "1"^^xsd:nonNegativeInteger ]',
+                )
+            )
     keys = [[s.name] for s in c.properties() if "key" in s.flags]
     keys += [unique_columns(s.name) for s in c.all("unique")]
     for cols in keys:
@@ -80,7 +82,8 @@ def to_turtle(onto: Ontology, base: str | None = None) -> str:
     for c in onto.concepts.values():
         blocks += _concept(n, c)
     ontology_iri = base.rstrip("#/") or base
-    head = n.head() + ["", f"<{ontology_iri}> a owl:Ontology ;", f"    rdfs:comment {literal('Exported by PlainOntology.')} .", ""]
+    comment = literal("Exported by PlainOntology.")
+    head = [*n.head(), "", f"<{ontology_iri}> a owl:Ontology ;", f"    rdfs:comment {comment} .", ""]
     return "\n".join(head) + "\n" + "\n".join(blocks)
 
 

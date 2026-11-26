@@ -1,0 +1,102 @@
+name: PlainOntology drift
+description: Check that a PlainOntology file still matches its sources; fail the check or comment on the pull request.
+author: Christopher Furacão
+branding:
+  icon: book-open
+  color: green
+
+inputs:
+  file:
+    description: Path to the .onto file (or several, separated by spaces).
+    required: true
+  install:
+    description: >-
+      What to pip install. Add extras for your sources, for example
+      "plainontology[postgres]" or "plainontology[mysql]==0.2.0".
+    default: plainontology
+  python-version:
+    description: Python version to run on.
+    default: "3.12"
+  fail-on-drift:
+    description: Fail the step when the sources changed.
+    default: "true"
+  comment:
+    description: >-
+      Post the drift report as a pull request comment. Needs
+      "permissions: pull-requests: write" in the workflow.
+    default: "false"
+  no-renames:
+    description: Never treat a vanished concept or property as renamed.
+    default: "false"
+
+outputs:
+  drift:
+    description: '"true" when the sources changed, else "false".'
+    value: ${{ steps.drift.outputs.drift }}
+  report:
+    description: The drift report as text.
+    value: ${{ steps.drift.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install PlainOntology
+      shell: bash
+      env:
+        INSTALL: ${{ inputs.install }}
+      run: python -m pip install --quiet --disable-pip-version-check "$INSTALL"
+
+    - id: drift
+      name: Compare the file with its sources
+      shell: bash
+      env:
+        FILES: ${{ inputs.file }}
+        NO_RENAMES: ${{ inputs.no-renames }}
+      run: |
+        set +e
+        args=()
+        if [ "$NO_RENAMES" = "true" ]; then args+=(--no-renames); fi
+        # shellcheck disable=SC2086
+        report=$(plainonto drift $FILES "${args[@]}" 2>&1)
+        code=$?
+        set -e
+        echo "$report"
+        if [ "$code" -ge 2 ]; then
+          echo "::error::plainonto could not read the file or its sources"
+          exit 2
+        fi
+        if [ "$code" -eq 1 ]; then echo "drift=true" >> "$GITHUB_OUTPUT"; else echo "drift=false" >> "$GITHUB_OUTPUT"; fi
+        {
+          echo "report<<PLAINONTO_REPORT_END"
+          echo "$report"
+          echo "PLAINONTO_REPORT_END"
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "### PlainOntology drift"
+          echo '```diff'
+          echo "$report"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Comment on the pull request
+      if: inputs.comment == 'true' && github.event_name == 'pull_request' && steps.drift.outputs.drift == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPORT: ${{ steps.drift.outputs.report }}
+        PR: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        body=$(printf '### PlainOntology drift\n\nThe ontology file no longer matches its sources. Run `plainonto refresh` and commit the result.\n\n```diff\n%s\n```\n' "$REPORT")
+        gh pr comment "$PR" --repo "$REPO" --body "$body"
+
+    - name: Fail on drift
+      if: inputs.fail-on-drift == 'true' && steps.drift.outputs.drift == 'true'
+      shell: bash
+      run: |
+        echo "::error::The ontology file no longer matches its sources. Run 'plainonto refresh' and commit the result."
+        exit 1

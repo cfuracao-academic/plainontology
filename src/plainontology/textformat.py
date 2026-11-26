@@ -135,7 +135,9 @@ def loads(text: str) -> Ontology:
                 raise ParseError(no, str(exc), raw) from None
             if last_prop is not None and indent > prop_indent:
                 if statement.kind not in CHILD_KINDS:
-                    raise ParseError(no, f"'{statement.kind}' cannot sit under a property; indent it like the property line", raw)
+                    raise ParseError(
+                        no, f"'{statement.kind}' cannot sit under a property; indent it like the property line", raw
+                    )
                 last_prop.children.append(statement)
                 continue
             if statement.kind in RULE_KINDS:
@@ -196,7 +198,7 @@ def dumps(onto: Ontology) -> str:
     for source in onto.sources:
         head.append(f"source {source}")
     if head:
-        out += [""] + head
+        out += ["", *head]
     for concept in onto.concepts.values():
         out.append("")
         out.extend(dump_concept(concept))
