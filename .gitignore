@@ -1,2 +1,17 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
-*
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+site/
+*.egg-info/
+examples/*.ttl
+examples/*.yaml
+examples/*.db
+examples/all.onto
