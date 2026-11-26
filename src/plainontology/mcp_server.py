@@ -9,6 +9,7 @@ written as ``[proposed]`` lines for a person to accept (remove the tag) or delet
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +17,8 @@ from mcp.server.mcpserver import MCPServer
 
 from .api import compare
 from .check import validate_record as _validate
-from .model import Concept, Ontology, Tag
-from .textformat import dump_concept, load, parse_statement, save
+from .model import CHILD_KINDS, RULE_KINDS, Concept, Ontology, Tag
+from .textformat import NAME, dump_concept, load, parse_statement, save
 
 INSTRUCTIONS = (
     "This server exposes the ontology (concepts, properties, relations) and semantic layer "
@@ -112,34 +113,55 @@ def build_server(path: Path, allow_proposals: bool = False) -> MCPServer:
         @server.tool()
         def propose(concept: str, line: str, reason: str = "agent") -> str:
             """Propose one line for a concept, for example 'synonym "Loan"' or
-            'has isbn : text unique'. It is written with a [proposed] tag for a
-            person to review; nothing existing is changed."""
+            'has isbn : text unique'. Use 'Concept.property' as the concept to
+            propose a line under a property, such as 'pattern "^[0-9]{13}$"'.
+            It is written with a [proposed] tag for a person to review; nothing
+            existing is changed."""
+            if any(unicodedata.category(ch) in ("Cc", "Zl", "Zp") for ch in line):
+                return "Not added: the line contains a line break or control character."
             try:
                 statement = parse_statement(line)
             except ValueError as exc:
                 return f"Not added: {exc}"
             if statement.kind == "comment":
                 return "Not added: comments cannot be proposed."
-            if not re.fullmatch(r"[A-Za-z_][\w.:/-]*", concept):
-                return f"Not added: '{concept}' is not a valid concept name (letters, digits, _ . : / -)."
-            detail = re.sub(r"[\[\]\n]", " ", reason).strip()[:80]
-            statement.tag = Tag("proposed", detail)
+            concept_name, _, prop_name = concept.partition(".")
+            if not re.fullmatch(NAME, concept_name) or (prop_name and not re.fullmatch(NAME, prop_name)):
+                return f"Not added: '{concept}' is not a valid concept name (or Concept.property)."
+            detail = " ".join(
+                "".join(" " if ch in "[]" or unicodedata.category(ch)[0] == "C" else ch for ch in reason).split()
+            )
+            statement.tag, statement.raw = Tag("proposed", detail[:80]), ""
             onto = load(path)
-            target = onto.find(concept)
-            if target is None:
-                target = Concept(concept, Tag("proposed", detail))
-                onto.concepts[concept] = target
-            existing = next((s for s in target.statements if s.key() == statement.key()), None)
+            target = onto.find(concept_name)
+            if prop_name:
+                prop = target.prop(prop_name) if target is not None else None
+                if prop is None:
+                    return f"Not added: {concept} is not a property in the file."
+                if statement.kind not in CHILD_KINDS:
+                    return f"Not added: '{statement.kind}' cannot go under a property."
+                lines = prop.children
+            else:
+                if statement.kind in RULE_KINDS:
+                    return f"Not added: '{statement.kind}' rules go under a property; use concept 'Concept.property'."
+                if target is None:
+                    target = Concept(concept_name, Tag("proposed", detail[:80]))
+                    onto.concepts[concept_name] = target
+                lines = target.statements
+            existing = next((s for s in lines if s.key() == statement.key()), None)
             if existing is not None and existing.body() == statement.body():
                 return f"Already present: {existing.render()}"
-            target.statements.append(statement)
-            save(path, onto)
-            return f"Proposed for {target.name}: {statement.render()}"
+            lines.append(statement)
+            try:
+                save(path, onto)
+            except ValueError as exc:
+                return f"Not added: {exc}"
+            return f"Proposed for {concept}: {statement.render()}"
 
     @server.resource(
         "ontology://file", name="ontology", mime_type="text/plain", description="The whole ontology file as plain text."
     )
     def ontology_file() -> str:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8-sig")
 
     return server

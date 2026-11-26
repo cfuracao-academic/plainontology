@@ -68,7 +68,7 @@ plainonto export library.onto --to turtle -o library.ttl
 plainonto export library.onto --to shacl -o library.shapes.ttl
 plainonto export library.onto --to linkml -o library.yaml
 plainonto validate library.onto Loan record.json
-plainonto rename library.onto Loan Borrowing   # or Concept.old Concept.new for a property
+plainonto rename library.onto Member Patron   # after a table rename that refresh did not detect
 ```
 
 The command is `plainonto` (short for `plainontology`; both work).
@@ -134,10 +134,10 @@ repos:
     rev: v0.2.0
     hooks:
       - id: plainonto-check
-      - id: plainonto-drift
+      - id: plainonto-drift   # runs on every commit, so a schema-only change is caught
 ```
 
-All inputs are in [docs/ci.md](docs/ci.md). Editors: a [VS Code extension](editors/vscode) highlights `.onto` files.
+`plainonto drift` and `plainonto check` with no file check every `.onto` file under the current folder. All inputs are in [docs/ci.md](docs/ci.md). Editors: a [VS Code extension](editors/vscode) highlights `.onto` files.
 
 ## Tried on real schemas
 
@@ -228,6 +228,8 @@ concept NAME [auto: where it came from]
 Types: `text integer decimal boolean date datetime binary json any enum(a|b)`. Flags: `key required unique many`. The empty prefix line sets the base IRI for exports.
 
 ## Known limitations
+
+* To give an extracted concept a friendlier name, add a `label`; the concept name follows the source.
 
 * Concept names are made with English singular rules (`books` becomes `Book`, `people` becomes `Person`).
 * The MCP server searches by keyword, runs locally over stdio, and does not lock the file while an agent proposes a line.

@@ -23,6 +23,6 @@ Any MCP client:
 | `search` | find concepts by name, label, synonym, definition or property |
 | `validate_record` | check a JSON object against a concept before acting on it (types, enums, rules, nested objects) |
 | `drift` | compare the file with its sources now |
-| `propose` | only with `--allow-proposals`: add a line tagged `[proposed]`; a person accepts it by deleting the tag |
+| `propose` | only with `--allow-proposals`: add a line tagged `[proposed]`; a person accepts it by deleting the tag. Use `Concept.property` as the concept to propose a rule or label under a property. Lines that would break the file are refused |
 
 The file is re-read on every call, so edits show up at once. Agents can never change or delete an existing line.

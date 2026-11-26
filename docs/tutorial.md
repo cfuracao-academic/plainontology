@@ -52,7 +52,7 @@ plainonto drift library.onto      # reports + Book: has pages : integer, and exi
 plainonto refresh library.onto    # writes the change; your lines stay where they are
 ```
 
-If a table or column is renamed, refresh moves your lines to the new name when it can tell. When it cannot, use `plainonto rename library.onto Book Volume` before refreshing. `--no-renames` turns the guessing off.
+If a table or column is renamed, refresh moves your lines to the new name when it can tell, and lists any of your lines elsewhere that still point to the old name. When it cannot tell, use `plainonto rename library.onto Member Patron` before refreshing. `--no-renames` turns the guessing off. To give an extracted concept a friendlier name, add a `label` instead: the concept name follows the source.
 
 ## 4. Use the file
 

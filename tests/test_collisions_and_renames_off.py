@@ -50,7 +50,7 @@ def test_no_renames_reports_gone_and_added():
     )
     merged, report = merge(loads(CURRENT), fresh, renames=False)
     assert list(merged.concepts) == ["Book", "Loan", "Volume"]
-    assert merged.concepts["Book"].tag is None  # kept because it holds your lines
+    assert merged.concepts["Book"].tag.kind == "auto"  # kept because it holds your lines, still extracted
     kinds = {c.kind for c in report.changes}
     assert "concept_kept" in kinds and "concept_added" in kinds and "concept_renamed" not in kinds
 

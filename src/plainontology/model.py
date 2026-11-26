@@ -12,7 +12,10 @@ length, pattern, format).
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 
 DATATYPES = ("text", "integer", "decimal", "boolean", "date", "datetime", "binary", "json", "any")
 FLAGS = ("key", "required", "unique", "many")
@@ -35,18 +38,96 @@ WELL_KNOWN_PREFIXES = {
 }
 
 
+_SIMPLE_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
 def quote(text: str) -> str:
-    """Render a double-quoted string with backslash escapes."""
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-    return f'"{escaped}"'
+    """Render a double-quoted string.
+
+    Escapes ``\\``, ``"``, new line, carriage return and tab, and writes every
+    other control or line-separator character as ``\\uXXXX``, so a string can
+    never break a line of the file.
+    """
+    out = []
+    for ch in text:
+        if ch in _SIMPLE_ESCAPES:
+            out.append(_SIMPLE_ESCAPES[ch])
+        elif unicodedata.category(ch) in ("Cc", "Zl", "Zp") or ch in "\x85\u2028\u2029":
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def unquote(text: str) -> str:
+    """Undo ``quote``. Only the escapes ``quote`` writes are interpreted; any other
+    backslash is kept as written, so ``pattern "^\\d+$"`` means what it says."""
+    out, i = [], 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and i + 1 < len(text):
+            nxt = text[i + 1]
+            simple = {"\\": "\\", '"': '"', "n": "\n", "r": "\r", "t": "\t"}
+            if nxt in simple:
+                out.append(simple[nxt])
+                i += 2
+                continue
+            if nxt == "u" and re.fullmatch(r"[0-9a-fA-F]{4}", text[i + 2 : i + 6] or ""):
+                out.append(chr(int(text[i + 2 : i + 6], 16)))
+                i += 6
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def number_text(value: object) -> str:
+    """A number as plain decimal text, never in exponent form (``1e-05`` becomes ``0.00001``)."""
+    try:
+        d = Decimal(str(value))
+    except InvalidOperation:
+        return str(value)
+    if d == d.to_integral_value():
+        return str(int(d))
+    return format(d.normalize(), "f")
+
+
+_PLAIN_ENUM_VALUE = re.compile(r'^[^|()"\s\\][^|()"\\]*(?<!\s)$')
+
+
+def make_enum(values: list) -> str:
+    """``enum(a|b)``; values that contain ``|``, brackets, quotes or spaces at
+    either end are written quoted: ``enum(S|"M (medium)"|"L|XL")``."""
+    parts = []
+    for v in values:
+        text = str(v)
+        clean = "".join(ch for ch in text if unicodedata.category(ch) != "Cc")
+        parts.append(clean if _PLAIN_ENUM_VALUE.match(clean) and clean == text else quote(text))
+    return f"enum({'|'.join(parts)})" if parts else "text"
 
 
 def enum_values(datatype: str) -> list[str] | None:
     """Return the allowed values of an ``enum(a|b)`` datatype, else None."""
-    if datatype.startswith("enum(") and datatype.endswith(")"):
-        inner = datatype[5:-1]
-        return [v.strip() for v in inner.split("|") if v.strip()]
-    return None
+    if not (datatype.startswith("enum(") and datatype.endswith(")")):
+        return None
+    inner, values, i = datatype[5:-1], [], 0
+    while i < len(inner):
+        if inner[i] == '"':
+            j = i + 1
+            while j < len(inner) and inner[j] != '"':
+                j += 2 if inner[j] == "\\" else 1
+            values.append(unquote(inner[i + 1 : j]))
+            i = j + 1
+            while i < len(inner) and inner[i] != "|":
+                i += 1
+            i += 1
+            continue
+        j = inner.find("|", i)
+        j = len(inner) if j < 0 else j
+        if inner[i:j].strip():
+            values.append(inner[i:j].strip())
+        i = j + 1
+    return values
 
 
 def unique_columns(name: str) -> list[str]:
@@ -64,7 +145,8 @@ class Tag:
     detail: str = ""
 
     def render(self) -> str:
-        return f"[{self.kind}: {self.detail}]" if self.detail else f"[{self.kind}]"
+        detail = re.sub(r"\s+", " ", self.detail.replace("]", ")").replace("[", "(")).strip()
+        return f"[{self.kind}: {detail}]" if detail else f"[{self.kind}]"
 
 
 AUTO = Tag("auto")
@@ -80,6 +162,10 @@ class Statement:
     tag: Tag | None = None
     lang: str = ""
     children: list[Statement] = field(default_factory=list)
+    # The line as a person typed it (without indentation), written back as is so
+    # a refresh never changes the text of a person's line. Cleared on any edit.
+    raw: str = field(default="", compare=False)
+    blank_before: int = field(default=0, compare=False)  # blank lines above it in the file
 
     @property
     def is_auto(self) -> bool:
@@ -138,9 +224,16 @@ class Statement:
         return f"{self.kind} {quote(self.value)}" + (f"@{self.lang}" if self.lang else "")
 
     def render(self) -> str:
+        """The canonical text of the line (used to compare lines)."""
         if self.tag is None or self.kind == "comment":
             return self.body()
         return f"{self.body()} {self.tag.render()}"
+
+    def text(self) -> str:
+        """What is written to the file: a person's own text when there is one."""
+        if self.raw and not self.is_auto:
+            return self.raw
+        return self.render()
 
     def child(self, kind: str) -> Statement | None:
         return next((c for c in self.children if c.kind == kind), None)
@@ -152,6 +245,7 @@ class Concept:
     tag: Tag | None = None
     statements: list[Statement] = field(default_factory=list)
     leading_comments: list[str] = field(default_factory=list)
+    raw_header: str = field(default="", compare=False)
 
     def header(self) -> str:
         return f"concept {self.name}" + (f" {self.tag.render()}" if self.tag else "")
@@ -189,6 +283,9 @@ class Ontology:
     trailing_comments: list[str] = field(default_factory=list)
     # (concept, message) pairs found while extracting; never written to the file
     warnings: list[tuple[str, str]] = field(default_factory=list)
+    # The lines before the first concept, in file order: ("comment", text),
+    # ("prefix", name), ("source", spec) or ("blank", ""). Empty for new files.
+    preamble: list[tuple[str, str]] = field(default_factory=list)
 
     def add_concept(self, concept: Concept) -> Concept:
         """Add a concept, folding its statements into an existing one of the same name."""

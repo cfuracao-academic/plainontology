@@ -16,8 +16,11 @@
 
 - id: plainonto-drift
   name: PlainOntology drift
-  description: Fail when an .onto file no longer matches its sources (run plainonto refresh to fix).
+  description: >-
+    Fail when any .onto file in the repository no longer matches its sources
+    (run plainonto refresh to fix). Runs on every commit, so a commit that only
+    changes a schema is checked too.
   entry: plainonto drift
   language: python
-  files: \.onto$
-  pass_filenames: true
+  always_run: true
+  pass_filenames: false

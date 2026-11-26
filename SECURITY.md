@@ -11,6 +11,7 @@ Please do not open a public issue. Use GitHub's private reporting instead: on th
 ## What PlainOntology touches
 
 * **Live databases** are read with read-only schema queries (no data is read, nothing is written). Connection URLs come from environment variables; a URL that contains a password is refused, because source lines are saved in the ontology file.
-* **Dump files and schemas** are parsed, never executed, except SQLite `.sql` files, which are loaded into a temporary in-memory database. Only use `.sql` files you trust as SQLite sources.
+* **Dump files and schemas** are parsed, never executed, except SQLite `.sql` files, which run in a temporary in-memory database that may not attach, open or write any other database file (`ATTACH`, `VACUUM INTO` and file functions are refused).
+* **Connection URLs** in a source line may not carry a password, in the user part or in the query string (`password`, `sslpassword`, `pwd` and similar); the check does not depend on optional packages.
 * **JSON Schema references** are followed to local files only. Web URLs are never fetched.
 * **The MCP server** runs locally over stdio. By default agents can only read; with `--allow-proposals` they can add lines tagged `[proposed]` to the file, never change or delete existing ones.

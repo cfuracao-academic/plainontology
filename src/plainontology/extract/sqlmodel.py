@@ -21,11 +21,12 @@ databases) reads its source into ``Table`` objects and hands them to
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 
-from ..model import AUTO, Concept, Statement, Tag
-from ..naming import concept_name, plural, relation_name, safe_name
+from ..model import AUTO, Concept, Statement, Tag, make_enum, number_text
+from ..naming import concept_name, pascal, plural, relation_name, safe_name
 
 
 @dataclass
@@ -71,9 +72,8 @@ def fold_partition(parent: Table, child: Table) -> None:
             parent.foreign_keys.append(ForeignKey(list(fk.columns), fk.table))
 
 
-def enum_type(values: list[str]) -> str:
-    cleaned = [re.sub(r"[|()]", "_", str(v)).strip() or "_" for v in values]
-    return f"enum({'|'.join(cleaned)})" if cleaned else "text"
+def enum_type(values: list) -> str:
+    return make_enum(values)
 
 
 _LENGTH_RE = re.compile(
@@ -121,7 +121,45 @@ def qualified(schema: str | None, name: str, default_schemas: tuple[str, ...]) -
 
 
 def _num(value) -> str:
-    return str(int(value)) if float(value).is_integer() else str(value)
+    return number_text(value)
+
+
+_PG_REGEX = {r"\y": r"\b", r"\m": r"\b", r"\M": r"\b"}
+# POSIX classes, which Python's re does not know and would silently misread.
+_POSIX = {
+    "alpha": "a-zA-Z\u00c0-\u024f",
+    "alnum": "0-9a-zA-Z\u00c0-\u024f",
+    "digit": "0-9",
+    "upper": "A-Z\u00c0-\u00de",
+    "lower": "a-z\u00df-\u00ff",
+    "space": "\\s",
+    "blank": " \\t",
+    "punct": "!-/:-@\\[-`{-~",
+    "xdigit": "0-9A-Fa-f",
+    "word": "\\w",
+    "cntrl": "\\x00-\\x1f\\x7f",
+}
+
+
+def python_pattern(pattern: str) -> str | None:
+    """A database regex as a Python regex, or None when it cannot be used.
+    PostgreSQL word boundaries (\\y, \\m, \\M) become \\b and POSIX classes
+    such as [:alpha:] become explicit ranges."""
+    import warnings
+
+    for pg, py in _PG_REGEX.items():
+        pattern = pattern.replace(pg, py)
+    for name, ranges in _POSIX.items():
+        pattern = pattern.replace(f"[:{name}:]", ranges)
+    if "[:" in pattern and ":]" in pattern:
+        return None  # a POSIX class we do not know
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # "possible nested set" means Python would read it differently
+        try:
+            re.compile(pattern)
+        except (re.error, FutureWarning):
+            return None
+    return pattern
 
 
 def _apply_checks(table: Table, dialect: str) -> tuple[dict[str, dict[str, str]], list[str]]:
@@ -147,7 +185,8 @@ def _apply_checks(table: Table, dialect: str) -> tuple[dict[str, dict[str, str]]
                 if col.datatype != "integer" and not f.kind.startswith("length"):
                     notes.append(f"check: {sql}")
                     continue
-                value = value + 1 if f.kind in ("min", "length_min") else value - 1
+                lower = f.kind in ("min", "length_min")
+                value = math.floor(value) + 1 if lower else math.ceil(value) - 1  # x > 2.5 on integers is x >= 3
             r = rules.setdefault(col.name, {})
             if f.kind in ("min", "max"):
                 r[f.kind] = _num(value)
@@ -156,11 +195,15 @@ def _apply_checks(table: Table, dialect: str) -> tuple[dict[str, dict[str, str]]
             elif f.kind == "length_min":
                 r["length_min"] = str(int(value))
             elif f.kind == "pattern":
-                col.pattern = col.pattern or str(value)
+                usable = python_pattern(str(value))
+                if usable is None:
+                    notes.append(f"check: {sql} (the regex is not usable outside the database)")
+                else:
+                    col.pattern = col.pattern or usable
     return rules, notes
 
 
-def _children(col: Column, rules: dict[str, str]) -> list[Statement]:
+def _children(col: Column, rules: dict[str, str], notes: list[str]) -> list[Statement]:
     out = []
     if "min" in rules:
         out.append(Statement("min", value=rules["min"], tag=AUTO))
@@ -171,12 +214,39 @@ def _children(col: Column, rules: dict[str, str]) -> list[Statement]:
     if low or high:
         out.append(Statement("length", value=f"{low}..{high}", tag=AUTO))
     if col.pattern:
-        out.append(Statement("pattern", value=col.pattern, tag=AUTO))
+        usable = python_pattern(col.pattern)
+        if usable is None:
+            notes.append(f"{col.name} must match {col.pattern} (the regex is not usable outside the database)")
+        else:
+            out.append(Statement("pattern", value=usable, tag=AUTO))
     return out
 
 
-def tables_to_concepts(tables: list[Table], label: str) -> list[Concept]:
-    """Turn tables into concepts. ``label`` names the source kind (and SQL dialect) in tags."""
+def _concept_names(tables: list[Table], warnings: list[str] | None) -> dict[str, str]:
+    names: dict[str, str] = {}
+    taken: dict[str, str] = {}
+    for t in tables:
+        name = concept_name(t.name)
+        if name in taken:
+            alternative = pascal(t.name)  # without making it singular: books becomes Books
+            n = 2
+            while alternative in taken:
+                alternative, n = f"{pascal(t.name)}{n}", n + 1
+            if warnings is not None:
+                warnings.append(
+                    f"tables {taken[name]} and {t.name} would both be concept {name}; {t.name} is {alternative}"
+                )
+            name = alternative
+        taken[name] = t.name
+        names[t.name] = name
+    return names
+
+
+def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | None = None) -> list[Concept]:
+    """Turn tables into concepts. ``label`` names the source kind (and SQL dialect) in tags.
+    Two tables that would get the same concept name (``book`` and ``books``) get
+    distinct names, and a warning says so."""
+    cnames = _concept_names(tables, warnings)
     by_name = {t.name: t for t in tables}
     concepts: dict[str, Concept] = {}
     join_links: list[tuple[Table, ForeignKey, ForeignKey]] = []
@@ -196,7 +266,7 @@ def tables_to_concepts(tables: list[Table], label: str) -> list[Concept]:
             join_links.append((t, fks[0], fks[1]))  # join table with data: also a concept
 
         kind = "view" if t.kind == "view" else "table"
-        concept = Concept(concept_name(t.name), Tag("auto", f"{label} {kind} {t.name}"))
+        concept = Concept(cnames[t.name], Tag("auto", f"{label} {kind} {t.name}"))
         if t.comment:
             concept.add(Statement("definition", value=t.comment, tag=AUTO))
         if t.kind == "view":
@@ -221,10 +291,10 @@ def tables_to_concepts(tables: list[Table], label: str) -> list[Concept]:
             line = Statement(
                 "has", name=prop_name[col.name], target=col.datatype, flags=tuple(flags), value=col.comment, tag=AUTO
             )
-            line.children = _children(col, rules.get(col.name, {}))
+            line.children = _children(col, rules.get(col.name, {}), notes)
             concept.add(line)
         for fk in fks:
-            target = concept_name(fk.table)
+            target = cnames.get(fk.table, concept_name(fk.table))
             rel = prop_name[fk.columns[0]] if len(fk.columns) == 1 else target[:1].lower() + target[1:]
             required = all((c := t.column(n)) is not None and (c.not_null or n in t.primary_key) for n in fk.columns)
             first = t.column(fk.columns[0]) if len(fk.columns) == 1 else None
@@ -258,7 +328,11 @@ def tables_to_concepts(tables: list[Table], label: str) -> list[Concept]:
         name = plural(relation_name(other.columns[0]))
         source.add(
             Statement(
-                "rel", name=name, target=concept_name(other.table), flags=("many",), tag=Tag("auto", f"via {t.name}")
+                "rel",
+                name=name,
+                target=cnames.get(other.table, concept_name(other.table)),
+                flags=("many",),
+                tag=Tag("auto", f"via {t.name}"),
             )
         )
 

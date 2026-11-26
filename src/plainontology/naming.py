@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-_WORD_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
+_WORD_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+|[^\W\d_]+")
 
 
 def words(text: str) -> list[str]:
@@ -67,8 +67,10 @@ def concept_name(table: str) -> str:
 
 
 def safe_name(text: str) -> str:
+    """A property name the file format accepts: starts with a letter (any script)
+    or ``_``, then letters, digits, ``_ . -``."""
     name = re.sub(r"[^\w.-]", "_", text.strip()) or "_"
-    return name if not name[0].isdigit() else "_" + name
+    return name if re.match(r"[^\W\d]", name) else "_" + name
 
 
 def relation_name(column: str) -> str:

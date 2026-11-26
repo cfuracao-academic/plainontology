@@ -37,10 +37,11 @@ SQL_KINDS = ("postgres", "mysql")
 Extractor = Callable[[str, Path, list[str]], list[Concept]]
 
 
-def _file(fn: Callable[[Path], list[Concept]]) -> Extractor:
+def _file(fn: Callable[..., list[Concept]], with_warnings: bool = False) -> Extractor:
     def run(location: str, base_dir: Path, warnings: list[str]) -> list[Concept]:
         path = Path(location)
-        return fn(path if path.is_absolute() else base_dir / path)
+        path = path if path.is_absolute() else base_dir / path
+        return fn(path, warnings) if with_warnings else fn(path)
 
     return run
 
@@ -56,13 +57,13 @@ def _sql(dialect: str) -> Extractor:
 
             path = Path(location)
             tables = tables_from_file(path if path.is_absolute() else base_dir / path, dialect, warnings)
-        return tables_to_concepts(tables, dialect)
+        return tables_to_concepts(tables, dialect, warnings)
 
     return run
 
 
 EXTRACTORS: dict[str, Extractor] = {
-    "sqlite": _file(extract_sqlite),
+    "sqlite": _file(extract_sqlite, with_warnings=True),
     "postgres": _sql("postgres"),
     "mysql": _sql("mysql"),
     "jsonschema": _file(extract_jsonschema),
@@ -106,7 +107,13 @@ def extract_all(sources: list[str], base_dir: Path) -> Ontology:
         problems: list[str] = []
         found = extract(spec, base_dir, problems)
         onto.warnings.extend(("", f"{spec}: {message}") for message in problems)
+        seen: set[str] = set()
         for concept in found:
+            if concept.name in seen:
+                onto.warnings.append(
+                    (concept.name, f"produced twice by {spec}; the two are combined (the first wins where they differ)")
+                )
+            seen.add(concept.name)
             first = origin.setdefault(concept.name, spec)
             if first != spec and not _shared(concept.name, first, spec):
                 existing = {s.key(): s for s in onto.concepts[concept.name].statements}
@@ -118,6 +125,8 @@ def extract_all(sources: list[str], base_dir: Path) -> Ontology:
                     (concept.name, f"defined by both {first} and {spec}; their lines are combined{detail}")
                 )
             onto.add_concept(concept)
+        if not found:
+            onto.warnings.append(("", f"{spec}: produced no concepts; is it the right file?"))
     return onto
 
 

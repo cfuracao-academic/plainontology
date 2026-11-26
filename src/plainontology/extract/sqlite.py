@@ -23,10 +23,36 @@ def _q(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
+_DENIED = {
+    getattr(sqlite3, "SQLITE_ATTACH", 24),
+    getattr(sqlite3, "SQLITE_DETACH", 25),
+}
+
+
+def _no_files(action: int, arg1, arg2, dbname, source) -> int:
+    """Authorizer for .sql sources: the script runs in memory and may not open,
+    attach or write any other database file."""
+    if action in _DENIED:
+        return sqlite3.SQLITE_DENY
+    if action == getattr(sqlite3, "SQLITE_FUNCTION", 31) and str(arg2).lower() in (
+        "load_extension",
+        "readfile",
+        "writefile",
+    ):
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
 def _connect(path: Path) -> sqlite3.Connection:
     if path.suffix.lower() == ".sql":
         con = sqlite3.connect(":memory:")
-        con.executescript(path.read_text(encoding="utf-8"))
+        con.set_authorizer(_no_files)
+        try:
+            con.executescript(path.read_text(encoding="utf-8-sig"))
+        except sqlite3.DatabaseError as exc:
+            con.close()
+            raise ValueError(f"{path.name}: {exc}") from None
+        con.set_authorizer(None)
         return con
     if not path.exists():
         raise FileNotFoundError(path)
@@ -88,10 +114,10 @@ def read_tables(con: sqlite3.Connection) -> list[Table]:
     return tables
 
 
-def extract_sqlite(path: Path) -> list[Concept]:
+def extract_sqlite(path: Path, warnings: list[str] | None = None) -> list[Concept]:
     con = _connect(path)
     try:
         tables = read_tables(con)
     finally:
         con.close()
-    return tables_to_concepts(tables, "sqlite")
+    return tables_to_concepts(tables, "sqlite", warnings)

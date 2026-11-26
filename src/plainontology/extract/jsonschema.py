@@ -23,7 +23,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ..model import AUTO, Concept, Statement, Tag
+from ..model import AUTO, Concept, Statement, Tag, make_enum, number_text
 from ..naming import pascal, safe_name, singular
 
 _FORMATS = {
@@ -50,12 +50,8 @@ def _clean(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
-def _enum_token(value: Any) -> str:
-    return re.sub(r"[|()]", "_", str(value)).strip() or "_"
-
-
 def _num(value) -> str:
-    return str(int(value)) if float(value).is_integer() else str(value)
+    return number_text(value)
 
 
 class _Shared:
@@ -90,7 +86,7 @@ class SchemaWalker:
         if target not in self.shared.walkers:
             if not target.exists():
                 return None
-            doc = json.loads(target.read_text(encoding="utf-8"))
+            doc = json.loads(target.read_text(encoding="utf-8-sig"))
             SchemaWalker(doc, target.name, target, self.shared).kind = self.kind
         return self.shared.walkers[target]
 
@@ -268,8 +264,8 @@ class SchemaWalker:
     def _union(self, owner: str, pname: str, options: list[dict], many: bool) -> tuple[str, str, str]:
         enums = [o.get("enum", [o["const"]] if "const" in o else None) for o in options]
         if all(e is not None for e in enums):
-            values = list(dict.fromkeys(_enum_token(v) for e in enums for v in (e or []) if v is not None))
-            return "has", f"enum({'|'.join(values)})", ""
+            values = list(dict.fromkeys(str(v) for e in enums for v in (e or []) if v is not None))
+            return "has", make_enum(values), ""
         resolved = []
         for o in options:
             walker, node = self.resolve(o["$ref"]) if "$ref" in o else (self, o)
@@ -317,10 +313,10 @@ class SchemaWalker:
                 return "rel", name, ""
             return "has", "json", ""
         if "enum" in ps:
-            values = [_enum_token(v) for v in ps["enum"] if v is not None]
-            return ("has", f"enum({'|'.join(values)})", "") if values else ("has", "any", "")
+            values = [str(v) for v in ps["enum"] if v is not None]
+            return ("has", make_enum(values), "") if values else ("has", "any", "")
         if "const" in ps:
-            return "has", f"enum({_enum_token(ps['const'])})", ""
+            return "has", make_enum([str(ps["const"])]), ""
         t, fmt = ps.get("type"), ps.get("format")
         if t == "string":
             if fmt == "date":
@@ -343,7 +339,7 @@ def root_name(schema: dict, path: Path | None) -> str:
 
 def extract_jsonschema(path: Path) -> list[Concept]:
     path = path.resolve()
-    schema = json.loads(path.read_text(encoding="utf-8"))
+    schema = json.loads(path.read_text(encoding="utf-8-sig"))
     walker = SchemaWalker(schema, path.name, path)
     walker.object_concept(root_name(schema, path), schema, f"jsonschema {path.name}")
     for key in ("$defs", "definitions"):

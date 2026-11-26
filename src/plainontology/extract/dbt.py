@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ..model import AUTO, Concept, Statement, Tag
+from ..model import AUTO, Concept, Statement, Tag, number_text
 from ..naming import concept_name, relation_name, safe_name
 from .sqlmodel import enum_type, map_type
 
@@ -42,11 +42,16 @@ class _Column:
         self.target: str | None = None  # concept name of a relationships test
         self.low: Any = None
         self.high: Any = None
+        self.inclusive = True
 
 
-def _num(value: Any) -> str:
-    f = float(value)
-    return str(int(f)) if f.is_integer() else str(f)
+def _num(value: Any) -> str | None:
+    """A numeric bound as text, or None for dates and other non-numbers."""
+    try:
+        float(str(value).strip("'\""))
+    except ValueError:
+        return None
+    return number_text(str(value).strip("'\""))
 
 
 def _ref_target(text: str, names: dict[str, str]) -> str | None:
@@ -61,7 +66,7 @@ def _ref_target(text: str, names: dict[str, str]) -> str | None:
 def extract_dbt(path: Path) -> list[Concept]:
     if path.is_dir():
         path = path / "target" / "manifest.json" if (path / "target").is_dir() else path / "manifest.json"
-    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest = json.loads(path.read_text(encoding="utf-8-sig"))
     nodes: dict[str, dict] = manifest.get("nodes") or {}
     sources: dict[str, dict] = manifest.get("sources") or {}
 
@@ -124,6 +129,7 @@ def extract_dbt(path: Path) -> list[Concept]:
             c.target = _ref_target(str(kwargs.get("to", "")), names)
         elif test == "accepted_range" and namespace in ("dbt_utils", ""):
             c.low, c.high = kwargs.get("min_value"), kwargs.get("max_value")
+            c.inclusive = kwargs.get("inclusive", True) is not False
 
     measures: dict[str, list[str]] = {}
     for sm in (manifest.get("semantic_models") or {}).values():
@@ -170,10 +176,17 @@ def extract_dbt(path: Path) -> list[Concept]:
                     value=re_space(c.description),
                     tag=AUTO,
                 )
-                if c.low is not None:
-                    line.children.append(Statement("min", value=_num(c.low), tag=AUTO))
-                if c.high is not None:
-                    line.children.append(Statement("max", value=_num(c.high), tag=AUTO))
+                for kind, bound in (("min", c.low), ("max", c.high)):
+                    if bound is None:
+                        continue
+                    number = _num(bound)
+                    if number is not None and c.inclusive:
+                        line.children.append(Statement(kind, value=number, tag=AUTO))
+                    else:
+                        word = "at least" if kind == "min" else "at most"
+                        if not c.inclusive:
+                            word = "more than" if kind == "min" else "less than"
+                        line.children.append(Statement("note", value=f"{word} {bound}", tag=AUTO))
             concept.add(line)
         parents = [by_id[d] for d in (node.get("depends_on") or {}).get("nodes", []) if d in by_id]
         if parents:

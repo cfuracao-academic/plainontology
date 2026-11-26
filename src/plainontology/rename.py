@@ -15,7 +15,7 @@ import re
 
 from .model import Concept, Ontology, Statement, unique_columns
 
-_NAME = re.compile(r"^[A-Za-z_][\w.:/-]*$")
+_NAME = re.compile(r"^[^\W\d][\w.:/-]*$")
 
 
 def _move(lines: list[Statement], into: list[Statement]) -> int:
@@ -30,18 +30,27 @@ def _move(lines: list[Statement], into: list[Statement]) -> int:
 
 
 def rename_concept(onto: Ontology, old: str, new: str) -> str:
-    if old not in onto.concepts:
-        raise ValueError(f"no concept named {old}")
     if not _NAME.match(new):
         raise ValueError(f"'{new}' is not a valid concept name")
-    concept = onto.concepts[old]
     refs = 0
+    if old not in onto.concepts:
+        # The concept was already renamed by a refresh: update the references left behind.
+        for c in onto.concepts.values():
+            for s in c.statements:
+                if s.kind == "rel" and s.target == old:
+                    s.target, s.raw, refs = new, "", refs + 1
+                elif s.kind == "is_a" and s.name == old:
+                    s.name, s.raw, refs = new, "", refs + 1
+        if not refs:
+            raise ValueError(f"no concept named {old}, and no line points to it")
+        return f"Updated {refs} reference(s) from {old} to {new}."
+    concept = onto.concepts[old]
     for c in onto.concepts.values():
         for s in c.statements:
             if s.kind == "rel" and s.target == old:
-                s.target, refs = new, refs + 1
+                s.target, s.raw, refs = new, "", refs + 1
             elif s.kind == "is_a" and s.name == old:
-                s.name, refs = new, refs + 1
+                s.name, s.raw, refs = new, "", refs + 1
     if new in onto.concepts:
         target = onto.concepts[new]
         moved = _move(concept.statements, target.statements)
@@ -49,7 +58,7 @@ def rename_concept(onto: Ontology, old: str, new: str) -> str:
         del onto.concepts[old]
         return f"Merged {old} into {new}: {moved} line(s) moved, {refs} reference(s) updated."
     onto.concepts = {(new if n == old else n): c for n, c in onto.concepts.items()}
-    concept.name = new
+    concept.name, concept.raw_header = new, ""
     return f"Renamed {old} to {new}: {refs} reference(s) updated."
 
 
@@ -68,11 +77,11 @@ def rename_property(onto: Ontology, concept_name: str, old: str, new: str) -> st
         concept.statements.remove(prop)
         message = f"Merged {concept_name}.{old} into {concept_name}.{new}: {moved} line(s) moved."
     else:
-        prop.name = new
+        prop.name, prop.raw = new, ""
         message = f"Renamed {concept_name}.{old} to {concept_name}.{new}."
     for s in concept.all("unique"):
         cols = [new if c == old else c for c in unique_columns(s.name)]
-        s.name = ", ".join(dict.fromkeys(cols))
+        s.name, s.raw = ", ".join(dict.fromkeys(cols)), ""
     return message
 
 

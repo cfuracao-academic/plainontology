@@ -51,16 +51,30 @@ def resolve_url(location: str) -> str:
         if not url:
             raise ValueError(f"environment variable {var} is not set (it should hold the database URL)")
         return with_driver(url)
-    try:
-        from sqlalchemy.engine import make_url
-    except ImportError:
-        make_url = None  # type: ignore[assignment]
-    if make_url is not None and make_url(location).password:
+    if _has_password(location):
         raise ValueError(
             "the database URL contains a password, which would be saved in the ontology file; "
             "put the URL in an environment variable and use KIND:env:VARIABLE instead"
         )
     return with_driver(location)
+
+
+_SECRET_KEYS = {"password", "passwd", "pwd", "sslpassword", "pass", "secret", "token", "access_token"}
+
+
+def _has_password(url: str) -> bool:
+    """True if a URL carries a password, in the user part or in its query string.
+    Works without SQLAlchemy, so the check never silently switches off."""
+    from urllib.parse import parse_qsl, urlsplit
+
+    try:
+        parts = urlsplit(url)
+        if parts.password:
+            return True
+        query = parse_qsl(parts.query, keep_blank_values=True)
+    except ValueError:
+        return True  # unreadable: refuse rather than risk saving a secret
+    return any(key.lower() in _SECRET_KEYS for key, _ in query)
 
 
 def _datatype(sqltype, dialect, domains: dict[str, str] | None = None) -> tuple[str, bool, int | None, str]:

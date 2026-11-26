@@ -44,7 +44,7 @@ concept Book [auto: sqlite table books]
 concept NAME [TAG]
 ```
 
-`NAME` starts with a letter or `_` and may contain letters, digits, `_ . : / -`. Each name appears once per file.
+`NAME` starts with a letter (in any script: `Élan`, `日本` are fine) or `_`, and may contain letters, digits, `_ . : / -`. Each name appears once per file.
 
 ## Statements on a concept
 
@@ -61,11 +61,13 @@ concept NAME [TAG]
 | `note "text"[@lang]` | anything else worth knowing | meaning |
 | `# text` | a comment | |
 
-**Types:** `text`, `integer`, `decimal`, `boolean`, `date`, `datetime`, `binary`, `json`, `any`, or `enum(a|b|c)`. Enum values may contain spaces but not `|` or `)`.
+**Types:** `text`, `integer`, `decimal`, `boolean`, `date`, `datetime`, `binary`, `json`, `any`, or `enum(a|b|c)`. An enum value that contains `|`, a bracket, a quote, or spaces at either end is written as a quoted string: `enum(S|"M (medium)"|"L|XL")`.
 
 **Flags:** `key` (identifier), `required`, `unique`, `many` (list or to-many relation).
 
-**Strings** are double-quoted; inside them use `\"` for a quote, `\\` for a backslash and `\n` for a new line.
+**Strings** are double-quoted. Inside them `\"` is a quote, `\\` a backslash, `\n` a new line, `\r` a carriage return, `\t` a tab and `\uXXXX` any other character (PlainOntology writes line separators and control characters this way, so a string never breaks a line). Any other backslash is kept as written, so `pattern "^\d{4}$"` means what it says.
+
+**Numbers** in `min` and `max` are plain decimals (`0.00001`, never `1e-05`).
 
 **Language tags** follow BCP 47 (`@fr`, `@pt-BR`). A string without a tag is the default language. One `label` and one `definition` per language.
 
@@ -115,10 +117,12 @@ When `plainonto refresh` re-extracts the sources:
 2. Each `[auto]` line is replaced by the extracted line with the same key, or removed if the sources no longer produce it. New extracted lines are appended to their concept (or property).
 3. If a person's line has the same key as an extracted line, the person's line wins and the extracted line is not written. The drift report shows both (`=`).
 4. Lines under a property follow the same rules. If you rewrote a property line, extracted rules still arrive under your line.
-5. A concept or property that is gone from the sources is removed if it was extracted and holds none of your lines. If it holds your lines, it is kept, its tag is removed, and the report says so (`!`).
-6. **Renames.** If an extracted concept holding your lines disappears and exactly one new concept appears with at least 60% of the same properties (and at least two in common), it is a rename: your lines move to the new name, in the old place (`>`). If an extracted property holding your lines disappears and exactly one new property of the same kind and type appears in that concept, your lines move to it (`>`). Anything less certain is reported, not guessed; use `plainonto rename` for those. `--no-renames` on `refresh` and `drift` turns rename detection off.
-7. If two sources define a concept with the same name, their lines are combined, the first source wins where both define the same line, and the report warns (`?`). A warning is not drift.
-8. Refresh is idempotent: running it twice changes nothing the second time.
+5. A concept or property that is gone from the sources is removed if it was extracted and holds none of your lines. If it holds your lines, it is kept, still tagged `[auto]`, and reported (`!`) on every run, so CI keeps flagging it until you move or delete your lines (or the source comes back, and it refreshes as usual).
+6. **Ownership of a concept.** A concept header you wrote (no tag) or an agent proposed stays as it is, even when a source starts producing a concept of that name; the extracted lines still arrive inside it.
+7. **Renames.** If an extracted concept holding your lines disappears and exactly one new concept appears with at least 60% of the same properties (and at least two in common), it is a rename: your lines move to the new name, in the old place (`>`). If an extracted property holding your lines disappears and exactly one new property of the same kind and type appears in that concept, your lines move to it (`>`). Anything less certain is reported, not guessed; use `plainonto rename` for those. `--no-renames` on `refresh` and `drift` turns rename detection off. Your lines elsewhere that point to the old name (`about -> Member`) are never rewritten; the report lists them (`?`) and `plainonto rename FILE Member Patron` updates them.
+8. If two sources (or two tables of one source) would make the same concept, the report warns (`?`). Within one SQL source the second table gets a distinct name (`books` becomes `Books` next to `Book`); across sources the lines are combined and the first source wins. Statements a source cannot read, and a source that produces nothing, are warnings too. A warning is not drift.
+9. **Your text is kept.** A line you wrote is written back exactly as you typed it, spacing and escapes included; blank lines inside a concept and the order of the header lines are kept. Indentation is normalised to two spaces per level.
+10. Refresh never writes a file it cannot read back, and is idempotent: running it twice changes nothing the second time.
 
 ## Drift report symbols
 
@@ -130,7 +134,7 @@ When `plainonto refresh` re-extracts the sources:
 | `>` | renamed in the sources; your lines moved with it |
 | `=` | your line kept over a different extracted line (not counted as drift) |
 | `!` | gone from the sources, kept because it holds your lines |
-| `?` | warning, for example two sources define the same concept (not counted as drift) |
+| `?` | warning: two sources or tables make the same concept, a statement could not be read, a source produced nothing, or a line of yours points to a renamed concept (not counted as drift) |
 
 ## Exports
 

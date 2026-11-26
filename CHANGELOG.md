@@ -25,7 +25,19 @@
 - LinkML: mixins for further parents, `unique_keys`, rules, multilingual labels (checked with the LinkML tools in CI)
 - Turtle: language tags, labels on properties, `owl:hasKey`
 
-**Tested on real schemas** (Pagila and Sakila, in CI at pinned versions), which led to:
+**Fixes from an independent review before release**
+- Nothing PlainOntology writes can be unreadable: numbers never use exponents, every line-separator and control character in a string is escaped, database regexes are translated to Python (`\y`, POSIX classes) or kept as a note, names may start with a letter in any script, and a final check refuses to write a file that would not read back
+- A person's lines are written back exactly as typed, including spacing and backslashes; unknown escapes such as `\d` are kept, and blank lines and the header order are kept
+- Enum values with `|`, brackets or quotes are written quoted: `enum(S|"M (medium)"|"L|XL")`
+- A property or concept gone from the sources but holding your lines stays `[auto]` and is reported on every run; a concept header you wrote stays yours; lines pointing to a renamed concept are listed, and `plainonto rename` updates them
+- UTF-8 byte order marks are accepted in every source and in `.onto` files; a source that produces nothing, a skipped statement, and two tables with the same concept name are warnings (the second table gets its own name)
+- Security: passwords in URL query strings are refused; SQLite `.sql` sources cannot attach or write other files
+- Every failure exits 2, never 1; the Action keeps error output out of the report, keeps one pull request comment up to date and skips forks; the drift hook runs on every commit; `drift` and `check` without files check every `.onto` file
+- MCP `propose` refuses lines that would break the file and can propose under a property (`Concept.property`)
+- `validate` treats `key` as required and checks dates strictly on every Python version; dbt date ranges and exclusive ranges become notes; LinkML enum and prefix names no longer collide
+- CI builds the wheel, installs it in clean environments and uses it
+
+ (Pagila and Sakila, in CI at pinned versions), which led to:
 - PostgreSQL partitions fold into their parent table with a note, and foreign keys declared on partitions carry up
 - PostgreSQL 18 virtual generated columns are read
 - A table the parser rejects is read column by column; anything skipped is reported as a `?` warning instead of disappearing

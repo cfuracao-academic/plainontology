@@ -28,7 +28,7 @@ METHODS = ("get", "put", "post", "delete", "patch", "head", "options", "trace")
 
 
 def load_document(path: Path) -> dict:
-    text = path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8-sig")
     if path.suffix.lower() in (".yaml", ".yml"):
         try:
             import yaml
@@ -137,6 +137,8 @@ def _operation(walker: SchemaWalker, route: str, method: str, op: dict, shared: 
         if not code.startswith("2"):
             continue
         response = responses.get(code) or responses.get(int(code)) or {}
+        if not isinstance(response, dict):
+            continue
         if "$ref" in response:
             _, resolved = walker.resolve(response["$ref"])
             response = resolved or {}

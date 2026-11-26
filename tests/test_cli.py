@@ -31,7 +31,7 @@ def test_export_and_validate(examples, monkeypatch, capsys):
     (examples / "rec.json").write_text(json.dumps([{"id": 1, "name": "A"}, {"name": 3}]), encoding="utf-8")
     assert main(["validate", "library.onto", "Author", "rec.json"]) == 1
     out = capsys.readouterr().out
-    assert "record 0: ok" in out and "record 1: 1 problem(s)" in out
+    assert "record 0: ok" in out and "record 1: 2 problem(s)" in out and "id: required but missing" in out
 
 
 def test_check_exit_codes(tmp_path, capsys):

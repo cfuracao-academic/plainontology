@@ -127,6 +127,9 @@ def check(onto: Ontology) -> list[Issue]:
 # --- record validation ------------------------------------------------------
 
 _MAX_DEPTH = 6
+# The same strict ISO 8601 shapes on every Python version.
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DATETIME = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?$")
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _URI = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:\S+$")
 _HOST = re.compile(
@@ -218,7 +221,8 @@ def _check_value(onto: Ontology, where: str, s: Statement, value: Any, depth: in
     elif t == "boolean":
         ok = isinstance(value, bool)
     elif t in ("date", "datetime"):
-        ok = isinstance(value, str)
+        shape = _DATE if t == "date" else _DATETIME
+        ok = isinstance(value, str) and bool(shape.match(value))
         if ok:
             try:
                 if t == "date":
@@ -246,7 +250,7 @@ def validate_record(onto: Ontology, concept_name: str, record: Any, depth: int =
     for name, s in props.items():
         where = f"{prefix}{name}"
         if record.get(name) is None:
-            if "required" in s.flags:
+            if "required" in s.flags or "key" in s.flags:
                 issues.append(f"{where}: required but missing")
             continue
         value = record[name]

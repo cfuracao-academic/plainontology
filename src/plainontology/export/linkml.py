@@ -136,6 +136,8 @@ def _rules(attr: dict, prop: Statement) -> None:
 def to_linkml(onto: Ontology, name: str = "ontology", base: str | None = None) -> str:
     base_iri: str = base or onto.prefixes.get("") or DEFAULT_BASE
     schema_name = safe_name(name).replace(".", "_")
+    if schema_name in onto.prefixes or onto.prefix_iri(schema_name) or schema_name == "linkml":
+        schema_name += "_schema"  # a file called schema.onto must not take over the schema: prefix
     prefixes: dict[str, str] = {"linkml": "https://w3id.org/linkml/", schema_name: base_iri}
     for p, iri in onto.prefixes.items():
         if p:
@@ -179,6 +181,9 @@ def to_linkml(onto: Ontology, name: str = "ontology", base: str | None = None) -
                 values = enum_values(s.target)
                 if values is not None:
                     enum_name = pascal(f"{c.name} {s.name} enum")
+                    base_enum, n = enum_name, 2
+                    while enum_name in enums:
+                        enum_name, n = f"{base_enum}{n}", n + 1
                     enums[enum_name] = {"permissible_values": {v: {} for v in values}}
                     a["range"] = enum_name
                 else:

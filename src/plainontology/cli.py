@@ -34,17 +34,41 @@ def _cmd_refresh(args) -> int:
     return 0
 
 
+_SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".tox", ".mypy_cache", "site"}
+
+
+def _find_onto_files() -> list[str]:
+    """All .onto files under the current folder, skipping hidden and tool folders."""
+    found = []
+    for path in sorted(Path().rglob("*.onto")):
+        if not any(part in _SKIP_DIRS or part.startswith(".") for part in path.parts[:-1]):
+            found.append(path.as_posix())
+    return found
+
+
+def _error(exc: BaseException) -> str:
+    if isinstance(exc, (ParseError, ValueError, FileNotFoundError)):
+        return f"plainonto: {exc}"
+    return f"plainonto: unexpected error ({type(exc).__name__}): {exc}"
+
+
 def _each(files: list[str], run) -> int:
     """Run ``run(path)`` for every file, with a heading when there are several.
-    Returns the worst exit code (2 for a file that cannot be read)."""
+    Returns the worst exit code: 1 for drift or issues, 2 for anything that
+    could not be read or failed (never 1, so a failure is never taken for drift)."""
+    if not files:
+        files = _find_onto_files()
+        if not files:
+            print("plainonto: no .onto files given or found under the current folder", file=sys.stderr)
+            return 2
     worst = 0
     for path in files:
         if len(files) > 1:
             print(f"== {path}")
         try:
             worst = max(worst, run(Path(path)))
-        except (ParseError, ValueError, FileNotFoundError) as exc:
-            print(f"plainonto: {exc}", file=sys.stderr)
+        except Exception as exc:
+            print(_error(exc), file=sys.stderr)
             worst = 2
     return worst
 
@@ -96,7 +120,7 @@ def _cmd_rename(args) -> int:
 
 
 def _cmd_validate(args) -> int:
-    raw = sys.stdin.read() if args.record == "-" else Path(args.record).read_text(encoding="utf-8")
+    raw = sys.stdin.read() if args.record == "-" else Path(args.record).read_text(encoding="utf-8-sig")
     data = json.loads(raw)
     records = data if isinstance(data, list) else [data]
     onto = load(args.file)
@@ -152,14 +176,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=_cmd_refresh)
 
     s = sub.add_parser("drift", help="report what changed in the sources without writing (exit 1 on drift)")
-    s.add_argument("files", nargs="+", metavar="file")
+    s.add_argument("files", nargs="*", metavar="file", help="default: every .onto file under the current folder")
     s.add_argument("--no-renames", action="store_true", help=no_renames)
     s.set_defaults(func=_cmd_drift)
 
     s = sub.add_parser(
         "check", help="check files for duplicates, unknown targets, misplaced rules and pending proposals"
     )
-    s.add_argument("files", nargs="+", metavar="file")
+    s.add_argument("files", nargs="*", metavar="file", help="default: every .onto file under the current folder")
     s.add_argument("--strict", action="store_true", help="fail on warnings too")
     s.set_defaults(func=_cmd_check)
 
@@ -197,8 +221,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (ParseError, ValueError, FileNotFoundError) as exc:
-        print(f"plainonto: {exc}", file=sys.stderr)
+    except Exception as exc:
+        print(_error(exc), file=sys.stderr)
         return 2
 
 

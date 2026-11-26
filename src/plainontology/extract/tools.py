@@ -39,7 +39,7 @@ def iter_tools(doc) -> Iterator[tuple[str, str, dict]]:
 
 
 def extract_tools(path: Path) -> list[Concept]:
-    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc = json.loads(path.read_text(encoding="utf-8-sig"))
     concepts: dict[str, Concept] = {
         "Tool": Concept(
             "Tool",

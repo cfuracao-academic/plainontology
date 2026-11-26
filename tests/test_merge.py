@@ -65,8 +65,8 @@ def test_report_lists_every_kind_of_change():
 def test_concepts_gone_from_sources():
     merged, _ = _merge()
     assert "Shelf" not in merged.concepts  # extracted, nothing of yours
-    room = merged.concepts["Room"]  # extracted, but holds your note
-    assert room.tag is None and [s.kind for s in room.statements] == ["note"]
+    room = merged.concepts["Room"]  # extracted, but holds your note: kept, still [auto]
+    assert room.tag.kind == "auto" and [s.kind for s in room.statements] == ["note"]
     assert "Idea" in merged.concepts  # yours entirely
 
 
@@ -74,7 +74,8 @@ def test_merge_is_idempotent():
     merged, _ = _merge()
     again, report = merge(merged, loads(FRESH))
     assert dumps(again) == dumps(merged)
-    assert not report.has_drift
+    # Room's source is still gone and it still holds your note: that stays drift until you resolve it.
+    assert [(c.kind, c.concept) for c in report.changes if c.kind != "kept_yours"] == [("concept_kept", "Room")]
 
 
 def test_inputs_are_not_modified():

@@ -158,8 +158,10 @@ def _merge_lines(
         replacement = fresh.get(key)
         if replacement is None:
             if s.is_property and _has_yours(s):
+                # Kept, still tagged [auto], and reported on every run until a person
+                # moves or deletes their lines: CI keeps flagging a property whose
+                # source is gone, and it refreshes normally if the source comes back.
                 kept = copy.deepcopy(s)
-                kept.tag = None
                 kept.children = [c for c in kept.children if not c.is_auto]
                 merged.append(kept)
                 report.add("property_kept", where, s.body())
@@ -243,6 +245,7 @@ def merge(current: Ontology, fresh: Ontology, renames: bool = True) -> tuple[Ont
         prefixes=dict(current.prefixes),
         sources=list(current.sources),
         trailing_comments=list(current.trailing_comments),
+        preamble=list(current.preamble),
     )
     for prefix, iri in fresh.prefixes.items():
         out.prefixes.setdefault(prefix, iri)
@@ -281,11 +284,29 @@ def merge(current: Ontology, fresh: Ontology, renames: bool = True) -> tuple[Ont
                 continue
             silent = DriftReport()
             statements = _merge_lines(old.statements, [], name, silent, renames=False)
-            out.concepts[name] = Concept(name, None, statements, list(old.leading_comments))
+            out.concepts[name] = Concept(name, old.tag, statements, list(old.leading_comments), old.raw_header)
             report.add("concept_kept", name, old.header())
             continue
 
         statements = _merge_lines(old.statements, new.statements, name, report, renames=detect_renames)
-        out.concepts[name] = Concept(name, new.tag, statements, list(old.leading_comments))
+        if old.tag is None or old.tag.kind != "auto":
+            # A person's (or a proposed) concept stays theirs; extracted lines still refresh inside it.
+            out.concepts[name] = Concept(name, old.tag, statements, list(old.leading_comments), old.raw_header)
+        else:
+            out.concepts[name] = Concept(name, new.tag, statements, list(old.leading_comments))
+
+    # M3: lines of yours that still point to a renamed concept are reported, never rewritten.
+    for old_name, new_name in rename_map.items():
+        for holder in out.concepts.values():
+            for s in holder.statements:
+                if s.is_auto:
+                    continue
+                if (s.kind == "rel" and s.target == old_name) or (s.kind == "is_a" and s.name == old_name):
+                    report.add(
+                        "warning",
+                        "",
+                        f"{holder.name}: your line '{s.body()}' still points to {old_name}, now {new_name}; "
+                        f"to update it run: plainonto rename FILE {old_name} {new_name}",
+                    )
 
     return out, report

@@ -61,10 +61,11 @@ runs:
         args=()
         if [ "$NO_RENAMES" = "true" ]; then args+=(--no-renames); fi
         # shellcheck disable=SC2086
-        report=$(plainonto drift $FILES "${args[@]}" 2>&1)
+        report=$(plainonto drift $FILES "${args[@]}" 2>"$RUNNER_TEMP/plainonto-stderr.txt")
         code=$?
         set -e
         echo "$report"
+        cat "$RUNNER_TEMP/plainonto-stderr.txt" >&2
         if [ "$code" -ge 2 ]; then
           echo "::error::plainonto could not read the file or its sources"
           exit 2
@@ -83,7 +84,13 @@ runs:
         } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Comment on the pull request
-      if: inputs.comment == 'true' && github.event_name == 'pull_request' && steps.drift.outputs.drift == 'true'
+      # Pull requests from forks get a read-only token, so they are skipped; a
+      # failing comment never fails the check. One comment is kept up to date.
+      if: >-
+        inputs.comment == 'true' && github.event_name == 'pull_request' &&
+        steps.drift.outputs.drift == 'true' &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      continue-on-error: true
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -91,8 +98,14 @@ runs:
         PR: ${{ github.event.pull_request.number }}
         REPO: ${{ github.repository }}
       run: |
-        body=$(printf '### PlainOntology drift\n\nThe ontology file no longer matches its sources. Run `plainonto refresh` and commit the result.\n\n```diff\n%s\n```\n' "$REPORT")
-        gh pr comment "$PR" --repo "$REPO" --body "$body"
+        marker="<!-- plainontology-drift -->"
+        body=$(printf '%s\n### PlainOntology drift\n\nThe ontology file no longer matches its sources. Run `plainonto refresh` and commit the result.\n\n```diff\n%s\n```\n' "$marker" "$REPORT")
+        existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+        if [ -n "$existing" ]; then
+          gh api -X PATCH "repos/$REPO/issues/comments/$existing" -f body="$body" > /dev/null
+        else
+          gh pr comment "$PR" --repo "$REPO" --body "$body"
+        fi
 
     - name: Fail on drift
       if: inputs.fail-on-drift == 'true' && steps.drift.outputs.drift == 'true'

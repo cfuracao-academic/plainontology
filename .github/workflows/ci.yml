@@ -146,6 +146,38 @@ jobs:
           grep -q 'partitioned by RANGE (payment_date) into 55 tables' pagila.onto
           grep -q 'customer -> Customer required' pagila.onto
 
+  package:
+    # Builds the sdist and wheel, checks them, then installs the wheel in clean
+    # environments outside the source tree and uses it, as PyPI users will.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check --strict dist/*
+      - name: Install the wheel with all extras and use it
+        run: |
+          python -m venv /tmp/full
+          /tmp/full/bin/pip install "$(ls dist/*.whl)[all]"
+          cp -r examples /tmp/try && cd /tmp/try
+          /tmp/full/bin/plainonto --version
+          /tmp/full/bin/plainonto drift library.onto
+          /tmp/full/bin/plainonto init pg.onto --from postgres:library.postgres.sql
+          /tmp/full/bin/plainonto init api.onto --from openapi:library.openapi.yaml
+          /tmp/full/bin/plainonto export library.onto --to shacl > /dev/null
+          /tmp/full/bin/python -c "import plainontology; assert plainontology.__file__.startswith('/tmp/full/'), plainontology.__file__"
+      - name: Install the wheel alone (no extras) and use it
+        run: |
+          python -m venv /tmp/core
+          /tmp/core/bin/pip install dist/*.whl
+          cd /tmp/try
+          /tmp/core/bin/plainonto check library.onto
+          /tmp/core/bin/plainonto drift library.onto
+          if /tmp/core/bin/plainonto init x.onto --from postgres:library.postgres.sql; then exit 1; fi
+
   example-drift:
     # The example file must match its sources, as a demo of using drift as a CI gate.
     runs-on: ubuntu-latest

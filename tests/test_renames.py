@@ -27,7 +27,7 @@ def test_property_kept_when_it_holds_your_lines():
     )
     merged, report = merge(loads(CURRENT), fresh)
     title = merged.concepts["Book"].prop("title")
-    assert title.tag is None and [c.render() for c in title.children] == ['label "Title"@en']
+    assert title.is_auto and [c.render() for c in title.children] == ['label "Title"@en']
     assert any(c.kind == "property_kept" for c in report.changes)
 
 

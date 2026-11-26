@@ -566,4 +566,4 @@ def tables_from_ddl(sql: str, dialect: str, warnings: list[str] | None = None) -
 
 
 def tables_from_file(path: Path, dialect: str, warnings: list[str] | None = None) -> list[Table]:
-    return tables_from_ddl(path.read_text(encoding="utf-8"), dialect, warnings)
+    return tables_from_ddl(path.read_text(encoding="utf-8-sig"), dialect, warnings)

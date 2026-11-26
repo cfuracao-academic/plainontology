@@ -36,14 +36,14 @@
       }
     },
     "concept": {
-      "match": "^(concept)\\s+([A-Za-z_][\\w.:/-]*)",
+      "match": "^(concept)\\s+([\\p{L}_][\\w.:/-]*)",
       "captures": {
         "1": { "name": "keyword.declaration.concept.onto" },
         "2": { "name": "entity.name.type.class.onto" }
       }
     },
     "property": {
-      "match": "^\\s+(has)\\s+([A-Za-z_][\\w.:/-]*)\\s*(:)\\s*(enum\\([^)]*\\)|text|integer|decimal|boolean|date|datetime|binary|json|any|[A-Za-z_]\\w*)((?:\\s+(?:key|required|unique|many))*)",
+      "match": "^\\s+(has)\\s+([\\p{L}_][\\w.:/-]*)\\s*(:)\\s*(enum\\((?:\"(?:[^\"\\\\]|\\\\.)*\"|[^)\"])*\\)|text|integer|decimal|boolean|date|datetime|binary|json|any|[A-Za-z_]\\w*)((?:\\s+(?:key|required|unique|many))*)",
       "captures": {
         "1": { "name": "keyword.declaration.property.onto" },
         "2": { "name": "variable.other.property.onto" },
@@ -53,7 +53,7 @@
       }
     },
     "relation": {
-      "match": "^\\s+([A-Za-z_][\\w.:/-]*)\\s*(->)\\s*([A-Za-z_][\\w.:/-]*)((?:\\s+(?:key|required|unique|many))*)",
+      "match": "^\\s+([\\p{L}_][\\w.:/-]*)\\s*(->)\\s*([\\p{L}_][\\w.:/-]*)((?:\\s+(?:key|required|unique|many))*)",
       "captures": {
         "1": { "name": "variable.other.property.onto" },
         "2": { "name": "keyword.operator.arrow.onto" },
@@ -62,7 +62,7 @@
       }
     },
     "statement": {
-      "match": "^\\s+(is_a|same_as|unique|label|definition|synonym|note)\\b(?:\\s+([A-Za-z_][\\w.:/-]*))?",
+      "match": "^\\s+(is_a|same_as|unique|label|definition|synonym|note)\\b(?:\\s+([\\p{L}_][\\w.:/-]*))?",
       "captures": {
         "1": { "name": "keyword.other.statement.onto" },
         "2": { "name": "entity.name.type.class.onto" }
