@@ -52,7 +52,6 @@ def _connect(path: Path) -> sqlite3.Connection:
         except sqlite3.DatabaseError as exc:
             con.close()
             raise ValueError(f"{path.name}: {exc}") from None
-        con.set_authorizer(None)
         return con
     if not path.exists():
         raise FileNotFoundError(path)
