@@ -217,7 +217,7 @@ def _apply_checks(
                 if usable is None:
                     notes.append(f"check: {sql} (the regex is not usable outside the database)")
                 else:
-                    if dialect == "mysql":  # MySQL compares with case-insensitive collations by default
+                    if dialect == "mysql" and not usable.startswith("(?i)"):  # case-insensitive collations
                         usable = "(?i)" + usable
                     if usable not in col.patterns:
                         col.patterns.append(usable)

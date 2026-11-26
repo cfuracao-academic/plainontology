@@ -45,13 +45,59 @@ _IRREGULAR = {
 }
 
 
+# Already singular although they end in s.
+_SINGULAR_S = {"news", "canvas", "atlas", "alias", "bias", "gas", "lens", "chaos", "bus", "campus", "census", "virus"}
+# Plurals that only add s to a word ending in ie, che, use or ase.
+_ADD_S = {
+    "movies",
+    "cookies",
+    "zombies",
+    "calories",
+    "rookies",
+    "goalies",
+    "selfies",
+    "smoothies",
+    "brownies",
+    "freebies",
+    "pixies",
+    "genies",
+    "ties",
+    "lies",
+    "pies",
+    "caches",
+    "niches",
+    "headaches",
+    "avalanches",
+    "moustaches",
+    "mustaches",
+    "quiches",
+    "cliches",
+    "uses",
+    "abuses",
+    "excuses",
+    "fuses",
+    "ruses",
+    "muses",
+}
+# Plurals that add es to a word ending in s (alias, aliases).
+_ADD_ES = {"aliases", "canvases", "atlases", "biases", "gases", "lenses", "buses", "bonuses", "viruses", "campuses"}
+
+
 def singular(word: str) -> str:
     lw = word.lower()
     if lw in _IRREGULAR:
         single = _IRREGULAR[lw]
         return single.capitalize() if word[:1].isupper() else single
+    if lw in _SINGULAR_S:
+        return word
+    if lw in _ADD_S:
+        return word[:-1]
+    if lw in _ADD_ES or lw.endswith("zzes"):
+        return word[:-2] if not lw.endswith("zzes") else word[:-3]
     if len(word) > 4 and lw.endswith("ies"):
         return word[:-3] + ("Y" if word[-1].isupper() else "y")
+    if lw.endswith("uses") and len(lw) > 5 and lw[-5] in "aeiou":  # houses, warehouses, causes
+        return word[:-1]
     if lw.endswith(("sses", "shes", "ches", "xes", "uses")):
         return word[:-2]
     if len(word) > 3 and lw.endswith("s") and not lw.endswith(("ss", "us", "is")):

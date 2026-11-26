@@ -47,6 +47,9 @@ class _Column:
         self.notes: list[str] = []
 
 
+_PLAIN_COLUMN = re.compile(r'[A-Za-z_][\w$]*|"[^"]+"|`[^`]+`')
+
+
 def _num(value: Any) -> str | None:
     """A numeric bound as text, or None for dates and other non-numbers."""
     try:
@@ -112,6 +115,7 @@ def extract_dbt(path: Path, warnings: list[str] | None = None) -> list[Concept]:
                     c.target = _ref_target(constraint.get("to") or constraint.get("expression") or "", names)
         columns[uid] = cols
 
+    expression_notes: dict[str, list[str]] = {}
     for node in nodes.values():
         if node.get("resource_type") != "test":
             continue
@@ -122,6 +126,13 @@ def extract_dbt(path: Path, warnings: list[str] | None = None) -> list[Concept]:
         column = node.get("column_name") or (meta.get("kwargs") or {}).get("column_name")
         if attached not in columns or not column:
             continue
+        if column not in columns[attached] and not _PLAIN_COLUMN.fullmatch(column.strip()):
+            # A test on an expression, such as (country_code || '-' || order_id): a note, not a property.
+            test_name = str(meta.get("name", "test")).replace("_", " ")
+            text = column.strip() if column.strip().startswith("(") else f"({column.strip()})"
+            expression_notes.setdefault(attached, []).append(f"{test_name} {text}")
+            continue
+        column = column.strip().strip('"`')
         c = columns[attached].setdefault(column, _Column(column))
         kwargs = meta.get("kwargs") or {}
         test = meta.get("name", "")
@@ -202,7 +213,7 @@ def extract_dbt(path: Path, warnings: list[str] | None = None) -> list[Concept]:
         parents = [by_id[d] for d in (node.get("depends_on") or {}).get("nodes", []) if d in by_id]
         if parents:
             concept.add(Statement("note", value="built from: " + ", ".join(dict.fromkeys(parents)), tag=AUTO))
-        for text in measures.get(cname, []):
+        for text in measures.get(cname, []) + expression_notes.get(uid, []):
             concept.add(Statement("note", value=text, tag=AUTO))
         concepts.append(concept)
     return concepts

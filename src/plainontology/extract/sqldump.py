@@ -83,6 +83,13 @@ def _plain_string(m: re.Match) -> str:
     return "'" + text.replace("''", "'").replace("'", "''") + "'"
 
 
+_ALTER_TYPE = re.compile(
+    r"^TYPE\s+(?P<name>[\w.\"]+)\s+(?:ADD\s+VALUE\s+(?:IF\s+NOT\s+EXISTS\s+)?'(?P<add>(?:[^']|'')*)'"
+    r"(?:\s+(?P<where>BEFORE|AFTER)\s+'(?P<anchor>(?:[^']|'')*)')?"
+    r"|RENAME\s+VALUE\s+'(?P<old>(?:[^']|'')*)'\s+TO\s+'(?P<new>(?:[^']|'')*)')",
+    re.I,
+)
+_UNSIGNED = {"UTINYINT", "USMALLINT", "UMEDIUMINT", "UINT", "UBIGINT", "UDECIMAL", "UDOUBLE", "UFLOAT"}
 _WITH_DATA = re.compile(r"\bWITH\s+(?:NO\s+)?DATA\s*;", re.I)
 # MySQL view modifiers the SQL parser does not know; they change nothing about the columns.
 _MYSQL_VIEW_MODIFIERS = re.compile(
@@ -195,6 +202,7 @@ class _Reader:
         self.table_comments: dict[str, str] = {}
         self.constraint_names: dict[tuple[str, str], tuple[str, object]] = {}
         self.check_count: dict[str, int] = {}
+        self.enum_columns: list[tuple[Column, str]] = []  # columns typed by a PostgreSQL enum
         self.warnings: list[str] = []
         self.partition_of: dict[str, str] = {}  # partition -> parent table
         self.partition_keys: dict[str, str] = {}  # parent -> "RANGE (day)"
@@ -227,6 +235,8 @@ class _Reader:
             key = kind.sql(self.dialect).split(".")[-1].strip('"`').lower()
             if key in self.enums:
                 return enum_type(self.enums[key]), False, None
+            if key == "citext":  # the case-insensitive text extension type
+                return "text", False, None
             if key in self.domains:  # its checks are added to the column (see column())
                 base = self.domains[key][0]
                 return map_type(base), False, declared_length(base)
@@ -313,6 +323,13 @@ class _Reader:
         kind_node = item.args.get("kind")
         datatype, many, length = self.datatype(kind_node)
         col = Column(item.name, datatype, many=many, max_length=length)
+        if kind_node is not None and getattr(kind_node.this, "name", "") in _UNSIGNED:  # MySQL unsigned: min 0
+            t.checks.append(f"{exp.column(item.name).sql(self.dialect)} >= 0")
+        base = kind_node.expressions[0] if kind_node is not None and many and kind_node.expressions else kind_node
+        if base is not None and getattr(base.this, "name", "") == "USERDEFINED":
+            key = base.sql(self.dialect).split(".")[-1].strip('"`').lower()
+            if key in self.enums:  # ALTER TYPE ... ADD VALUE later changes this column too
+                self.enum_columns.append((col, key))
         if kind_node is not None and getattr(kind_node.this, "name", "") == "USERDEFINED":
             domain = self.domains.get(kind_node.sql(self.dialect).split(".")[-1].strip('"`').lower())
             if domain:
@@ -554,10 +571,13 @@ class _Reader:
                     t.notes.append(note.replace("WHERE", "where", 1))
                 elif table is not None and cols:
                     t = self.table(self.qual(table))
+                    index_name = index.name or None
                     if len(cols) == 1:
                         t.unique.add(cols[0])
+                        self.remember(t, index_name, "unique", cols[0])
                     else:
                         t.unique_sets.append(cols)
+                        self.remember(t, index_name, "unique_set", cols)
         elif _is(node, "Alter") or _is(node, "AlterTable"):
             self.alter(node)
         elif isinstance(node, exp.Comment) and node.args.get("expression") is not None:
@@ -578,12 +598,60 @@ class _Reader:
                     col.comment = text
                 else:
                     self.column_comments[(table, target.name)] = text
+        elif isinstance(node, exp.Drop) and (node.args.get("kind") or "").upper() == "INDEX":
+            cluster = node.args.get("cluster")  # MySQL: DROP INDEX name ON table
+            owner = self.qual(cluster.this) if cluster is not None and cluster.this is not None else None
+            for dropped in node.args.get("tables") or []:
+                self.drop_index(dropped.name, owner)
+        elif isinstance(node, exp.Command) and str(node.this).upper() == "ALTER":
+            self.alter_command(str(node.expression or ""))
         elif isinstance(node, exp.Drop) and (node.args.get("kind") or "").upper() in ("TABLE", "VIEW"):
             for target in node.args.get("tables") or []:
                 name = self.qual(target)
                 self.tables.pop(name, None)
                 self.views = [(n, q) for n, q in self.views if n != name]
                 self.table_comments.pop(name, None)
+
+    def drop_index(self, name: str, table: str | None) -> None:
+        """DROP INDEX: undo a unique index (other indexes do not change the file)."""
+        owners = [table] if table else [tn for (tn, cn) in self.constraint_names if cn == name.lower()]
+        for owner in owners:
+            if owner in self.tables and (owner, name.lower()) in self.constraint_names:
+                self.drop_constraint(self.tables[owner], name)
+
+    def alter_command(self, text: str) -> None:
+        """ALTER statements the parser keeps as text: PostgreSQL ALTER TYPE on an enum."""
+        flat = " ".join(text.split())
+        m = _ALTER_TYPE.match(flat)
+        if not m:
+            renamed = re.match(r"^TYPE\s+([\w.\"]+)\s+RENAME\s+TO\s+([\w\"]+)$", flat, re.I)
+            if renamed:
+                old = renamed[1].split(".")[-1].strip('"').lower()
+                new = renamed[2].strip('"').lower()
+                if old in self.enums:
+                    self.enums[new] = self.enums.pop(old)
+                    self.enum_columns = [(col, new if key == old else key) for col, key in self.enum_columns]
+            elif re.match(r"^TYPE\b", flat, re.I) and not re.search(r"\b(OWNER\s+TO|SET\s+SCHEMA)\b", flat, re.I):
+                self.warnings.append(f"skipped a statement it could not read: ALTER {flat[:60]}")
+            return
+        name = m["name"].split(".")[-1].strip('"').lower()
+        values = self.enums.get(name)
+        if values is None:
+            return
+        before = list(values)
+        if m["add"] is not None:
+            value = m["add"].replace("''", "'")
+            if value not in values:
+                anchor = (m["anchor"] or "").replace("''", "'")
+                if anchor in values:
+                    values.insert(values.index(anchor) + (1 if (m["where"] or "").upper() == "AFTER" else 0), value)
+                else:
+                    values.append(value)
+        elif m["old"] is not None and m["old"].replace("''", "'") in values:
+            values[values.index(m["old"].replace("''", "'"))] = m["new"].replace("''", "'")
+        for col, key in self.enum_columns:
+            if key == name and col.datatype == enum_type(before):
+                col.datatype = enum_type(values)
 
     # views -------------------------------------------------------------
     def resolve_view(self, name: str, query) -> Table:

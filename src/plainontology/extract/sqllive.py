@@ -167,6 +167,8 @@ def _read(
     t = Table(qualified(schema, name, defaults), kind=kind)
     for col in insp.get_columns(name, schema=schema):
         datatype, many, length, pattern = _datatype(col["type"], engine.dialect, domains)
+        if kind != "view" and getattr(col["type"], "unsigned", False):  # MySQL unsigned: min 0, as in dumps
+            t.checks.append(f"{engine.dialect.identifier_preparer.quote(col['name'])} >= 0")
         if kind != "view" and type(col["type"]).__name__ == "DOMAIN":
             domain_name = str(getattr(col["type"], "name", "") or "").split(".")[-1].strip('"').lower()
             t.checks += [for_column(sql, col["name"], "postgres") for sql in domain_checks.get(domain_name, [])]

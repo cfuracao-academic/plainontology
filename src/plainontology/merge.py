@@ -181,8 +181,9 @@ def _merge_lines(
     for s in new:
         fresh.setdefault(s.key(), s)
     # A proposal the sources now produce gives way to the extracted line.
-    confirmed = {s.key() for s in old if _is_proposed(s) and s.key() in fresh}
-    yours = [s for s in old if not s.is_auto and s.key() not in confirmed]
+    person_keys = {s.key() for s in old if s.tag is None and s.kind != "comment"}
+    confirmed = {s.key() for s in old if _is_proposed(s) and s.key() in fresh and s.key() not in person_keys}
+    yours = [s for s in old if not s.is_auto and not (_is_proposed(s) and s.key() in confirmed)]
     your_keys = {s.key() for s in yours if s.kind != "comment"}
     old_keys = {s.key() for s in old}
 
@@ -229,7 +230,7 @@ def _merge_lines(
 
     for s in old:
         key = s.key()
-        if key in confirmed and not s.is_auto:
+        if key in confirmed and _is_proposed(s):
             if key in placed:
                 report.add("proposal_confirmed", where, placed_line[key].body(), s.body())
                 hand_over(s)
@@ -409,17 +410,23 @@ def merge(current: Ontology, fresh: Ontology, renames: bool = True) -> tuple[Ont
         if old.tag is None or old.tag.kind != "auto":
             # A person's (or a proposed) concept stays theirs; extracted lines still refresh inside it.
             out.concepts[name] = Concept(name, old.tag, statements, list(old.leading_comments), old.raw_header)
+            if old.tag is not None and old.tag.kind == "proposed":
+                report.add(
+                    "warning", name, "still [proposed], but the sources now produce it; delete the tag to accept it"
+                )
         else:
-            if old.tag != new.tag:  # e.g. the table behind it was renamed
+            if old.tag != new.tag and old_name == name:  # e.g. the table behind it was renamed
                 report.add("changed", name, new.header(), old.header())
-            out.concepts[name] = Concept(name, new.tag, statements, list(old.leading_comments), old.raw_header)
+            # H1 (fifth review): a renamed concept gets a fresh header, never the old name's text.
+            header = old.raw_header if old_name == name else ""
+            out.concepts[name] = Concept(name, new.tag, statements, list(old.leading_comments), header)
 
     for old_name, name in order:  # keep the blank lines above each concept
         if old_name and name in out.concepts:
             out.concepts[name].blank_before = current.concepts[old_name].blank_before
 
     # M3: lines of yours that still point to a renamed concept are reported, never rewritten.
-    for old_name, new_name in rename_map.items():
+    for old_name, new_name in {**target_map, **rename_map}.items():
         for holder in out.concepts.values():
             for s in holder.statements:
                 if s.is_auto:

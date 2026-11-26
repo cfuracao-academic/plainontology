@@ -112,11 +112,15 @@ def _part(node) -> list[Finding] | None:
             return [Finding("enum", col, values)] if values else None
         return None
     regexp = getattr(exp, "RegexpLike", None)
-    if regexp is not None and isinstance(node, regexp) and (col := _column(node.this)):
+    iregexp = getattr(exp, "RegexpILike", None)
+    if any(c is not None and isinstance(node, c) for c in (regexp, iregexp)) and (col := _column(node.this)):
         pattern = _strip(node.expression)
         if isinstance(pattern, exp.Literal) and pattern.is_string:
-            return [Finding("pattern", col, pattern.this)]
+            flag = "(?i)" if iregexp is not None and isinstance(node, iregexp) else ""  # ~* ignores case
+            return [Finding("pattern", col, flag + pattern.this)]
         return None
+    if isinstance(node, exp.EQ) and (col := _length_column(node.this)) and (n := _number(node.expression)) is not None:
+        return [Finding("length_min", col, n), Finding("length_max", col, n)]  # char_length(x) = 8
     if isinstance(node, exp.Between) and (col := _column(node.this)):
         low, high = _number(node.args.get("low")), _number(node.args.get("high"))
         if low is not None and high is not None:

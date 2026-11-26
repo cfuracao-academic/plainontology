@@ -28,7 +28,8 @@ Dumps are read in their own dialect; live databases through SQLAlchemy, read-onl
 | `LIKE other`, `CREATE TABLE ... AS SELECT`, `INHERITS (parent)` | the copied columns (and keys and checks with `INCLUDING`); the query's columns; `is_a Parent` |
 | join tables | a `many` relation; a join table with extra columns, or one other tables link to, also stays a concept |
 | triggers | notes |
-| `ALTER TABLE` (add, drop, rename, change and alter columns; drop constraints; rename tables), `DROP TABLE` | applied in order, so migration scripts work as a dump; a constraint that cannot be found is a warning |
+| `ALTER TABLE` (add, drop, rename, change and alter columns; drop constraints; rename tables), `DROP TABLE`, `DROP INDEX`, `ALTER TYPE ... ADD VALUE / RENAME VALUE / RENAME TO` | applied in order, so migration scripts work as a dump; a constraint that cannot be found is a warning |
+| MySQL `unsigned`, `char_length(x) = 8`, `x ~* 'regex'`, `citext` | `min 0`, `length 8..8`, a case-insensitive pattern, `text` |
 | several CHECKs on one column | the strictest `min` and `max`; every pattern is kept and all must match |
 | partitions (`PARTITION OF`, `ATTACH PARTITION`) | fold into the parent table with a note; their foreign keys carry up |
 | a statement or column the parser cannot read | skipped and reported as a `?` warning, never dropped silently; a table is read column by column so one odd column does not hide it |

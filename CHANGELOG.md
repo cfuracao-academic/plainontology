@@ -25,6 +25,19 @@
 - LinkML: mixins for further parents, `unique_keys`, rules, multilingual labels (checked with the LinkML tools in CI)
 - Turtle: language tags, labels on properties, `owl:hasKey`
 
+**Fixes from a fifth independent review**
+- A concept renamed in its source (a retitled Pydantic model) gets its new header; before, the old name stayed and every later `drift` reported the rename again
+- A person's line always wins over an extracted line: only a `[proposed]` line gives way when the sources start producing its key
+- A person's relation or `is_a` to any renamed concept is reported (`?`), not only when that concept held the person's lines
+- A `[proposed]` concept the sources now produce is reported, with how to accept it; a concept rename is reported once
+- Migration scripts: `DROP INDEX` and PostgreSQL `ALTER TYPE ... ADD VALUE / RENAME VALUE / RENAME TO` are applied
+- dbt: a test on an expression is a note, not a made-up property
+- Singular names: movies, cookies, warehouses, caches, aliases, quizzes and similar come out right; news, canvas and atlas stay as they are
+- MySQL `unsigned` gives `min 0`; `char_length(x) = 8` gives `length 8..8`; `~*` gives a case-insensitive pattern; `citext` is `text`
+- Two OpenAPI sources no longer warn about the shared `Operation` concept; a repeated warning is shown once
+- A person's lines keep their indentation on every write (refresh, rename, agent proposals)
+- The Action only updates a pull request comment it posted itself
+
 **Fixes from a fourth independent review**
 - A person's lines are never lost when a proposal and an extracted line describe the same property (for example after `rename` merges two concepts): the lines under the one that gives way move to the one that stays
 - JSON Schema and OpenAPI: an inline object never takes the name of a definition; a named `oneOf`/`anyOf` of objects in `$defs` or `components/schemas` becomes a concept its options are a kind of; schemas in other YAML files are read; a document that is a list describes its items; form and other non-JSON request bodies are read, and a body without a schema is a warning; a boolean `minimum` is a note, not a bound

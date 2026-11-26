@@ -126,7 +126,8 @@ runs:
         DRIFT: ${{ steps.drift.outputs.drift }}
       run: |
         marker="<!-- plainontology-drift -->"
-        existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+        # Only a comment this Action posted (anyone could post one starting with the marker).
+        existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | head -1)
         if [ "$DRIFT" != "true" ]; then
           if [ -n "$existing" ]; then
             body=$(printf '%s\n### PlainOntology drift\n\nNo drift: the ontology file matches its sources again.\n' "$marker")

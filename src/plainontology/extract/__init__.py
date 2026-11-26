@@ -102,8 +102,11 @@ def extract(spec: str, base_dir: Path, warnings: list[str] | None = None) -> lis
 
 
 def _shared(name: str, first: str, second: str) -> bool:
-    """Concepts every tools file defines on purpose (the ``Tool`` parent)."""
-    return name == "Tool" and first.startswith("tools:") and second.startswith("tools:")
+    """Concepts every file of a kind defines on purpose (the ``Tool`` and ``Operation`` parents)."""
+    for parent, kind in (("Tool", "tools:"), ("Operation", "openapi:")):
+        if name == parent and first.startswith(kind) and second.startswith(kind):
+            return True
+    return False
 
 
 def extract_all(sources: list[str], base_dir: Path) -> Ontology:
@@ -118,7 +121,8 @@ def extract_all(sources: list[str], base_dir: Path) -> Ontology:
     for spec in sources:
         problems: list[str] = []
         found = extract(spec, base_dir, problems)
-        onto.warnings.extend(("", f"{spec}: {message}") for message in problems)
+        for message in dict.fromkeys(problems):  # one warning per message, however often it came up
+            onto.warnings.append(("", f"{spec}: {message}"))
         seen: set[str] = set()
         for concept in found:
             if concept.name in seen:

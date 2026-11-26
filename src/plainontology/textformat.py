@@ -143,6 +143,7 @@ def loads(text: str) -> Ontology:
             except ValueError as exc:
                 raise ParseError(no, str(exc), raw) from None
             statement.raw = typed
+            statement.indent = raw[: len(raw) - len(typed)]
             if statement.kind == "comment":  # a comment keeps its indentation too
                 statement.raw, statement.verbatim = raw, True
             statement.blank_before = gap
@@ -255,14 +256,22 @@ def loads(text: str) -> Ontology:
     return onto
 
 
-def _lead(statement: Statement, indent: str) -> str:
-    return "" if statement.col0 or (statement.verbatim and not statement.is_auto) else indent
+def _lead(statement: Statement, indent: str, above: str | None = None) -> str:
+    """The indentation to write: a person's own (if it keeps the line under ``above``),
+    otherwise ``indent``. Extracted lines always use ``indent``."""
+    if statement.col0 or (statement.verbatim and not statement.is_auto):
+        return ""
+    own = statement.indent
+    if own and not statement.is_auto and (above is None or _indent(own + "x") > _indent(above + "x")):
+        return own
+    return indent
 
 
 def dump_statement(statement: Statement, indent: str = "  ") -> list[str]:
-    lines = [""] * statement.blank_before + [f"{_lead(statement, indent)}{statement.text()}"]
+    lead = _lead(statement, indent)
+    lines = [""] * statement.blank_before + [f"{lead}{statement.text()}"]
     for c in statement.children:
-        lines += [""] * c.blank_before + [f"{_lead(c, indent + '  ')}{c.text()}"]
+        lines += [""] * c.blank_before + [f"{_lead(c, lead + '  ', lead)}{c.text()}"]
     return lines
 
 
