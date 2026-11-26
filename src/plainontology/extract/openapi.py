@@ -151,12 +151,12 @@ def _operation(walker: SchemaWalker, route: str, method: str, op: dict, shared: 
         if "$ref" in body:
             _, resolved = walker.resolve(body["$ref"])
             body = resolved or {}
-        schema = _json_schema(body.get("content"))
-        if schema is None and body.get("content"):
+        body_schema = _json_schema(body.get("content"))
+        if body_schema is None and body.get("content"):
             walker.shared.warnings.append(
                 f"{method.upper()} {route}: the request body has no schema ({', '.join(body['content'])}); skipped"
             )
-        _body(walker, concept, schema, bool(body.get("required")))
+        _body(walker, concept, body_schema, bool(body.get("required")))
 
     responses = op.get("responses") or {}
     for code in sorted(str(c) for c in responses):
