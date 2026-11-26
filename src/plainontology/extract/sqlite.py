@@ -48,6 +48,22 @@ def _no_files(action: int, arg1, arg2, dbname, source) -> int:
 SCRIPT_SECONDS = 10
 
 
+def _run_script(con: sqlite3.Connection, script: str, deadline: float) -> None:
+    """Run a script statement by statement, checking the time between them: SQLite's
+    progress handler counts afresh for each statement, so many quick-looking slow
+    statements would never trip it."""
+    chunk = ""
+    for line in script.splitlines(keepends=True):
+        chunk += line
+        if sqlite3.complete_statement(chunk):
+            if time.monotonic() >= deadline:
+                raise sqlite3.OperationalError("interrupted")
+            con.executescript(chunk)
+            chunk = ""
+    if chunk.strip():
+        con.executescript(chunk)  # an unfinished statement: SQLite reports the error
+
+
 def _connect(path: Path) -> sqlite3.Connection:
     if path.suffix.lower() == ".sql":
         con = sqlite3.connect(":memory:")
@@ -68,7 +84,7 @@ def _connect(path: Path) -> sqlite3.Connection:
         timer.daemon = True
         timer.start()
         try:
-            con.executescript(path.read_text(encoding="utf-8-sig"))
+            _run_script(con, path.read_text(encoding="utf-8-sig"), deadline)
         except sqlite3.DatabaseError as exc:
             con.close()
             late = fired.is_set() or time.monotonic() >= deadline
