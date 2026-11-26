@@ -27,6 +27,14 @@
 
 **Upgrading from 0.1.x**: singular concept names are better (`movies` is `Movie`, not `Movy`; `shelves` is `Shelf`). A concept whose name changes this way is matched by rename detection when it has two or more properties; otherwise the first refresh reports it as removed (or kept, with your lines) and added. Run `plainonto drift` after upgrading and use `plainonto rename FILE Old New` where needed.
 
+**Fixes from an eighth independent review**
+- Refresh and `rename` no longer stop with "refusing to write" when the first concept goes and the next one has a comment banner with a blank line under it
+- A column-0 comment among comments under a property keeps its order
+- Migration scripts: MySQL `RENAME TABLE a TO b` and `RENAME INDEX`, PostgreSQL `ALTER TABLE ... SET SCHEMA` and `RENAME CONSTRAINT` are applied; an `ALTER TABLE` on a table the file never created is a warning, not a new concept
+- `DROP INDEX` without a schema finds the index in another schema when only one has it (after `SET search_path`)
+- MySQL: `float unsigned` gives `min 0` and quoted text is never touched; `DROP COLUMN` on a column of a unique key keeps the rest of the key unique
+- With `PLAINONTO_SOURCE_ROOT` set, `.onto` files must be inside it too
+
 **Fixes from a seventh independent review**
 - A comment written at the start of a line above a concept stays that concept's comment; it is no longer pulled into the concept before it
 - Comments are written at the level of the lines around them, so a comment between two properties can never end up under one of them; `save` now also refuses a write that would move a comment

@@ -73,6 +73,9 @@ def _each(files: list[str], run) -> int:
         if len(files) > 1:
             print(f"== {path}")
         try:
+            from .extract import within_root
+
+            within_root(Path(path))  # with PLAINONTO_SOURCE_ROOT set, the file must be inside it too
             worst = max(worst, run(Path(path)))
         except Exception as exc:
             print(_error(exc), file=sys.stderr)

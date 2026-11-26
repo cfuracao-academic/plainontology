@@ -125,6 +125,24 @@ def loads(text: str) -> Ontology:
     held: list[Statement] = []  # comments at a property's indentation, before its child lines?
     blanks = 0
 
+    def release_held() -> None:
+        """At a concept header or the end of the file: held comments up to the last
+        indented one stay in this concept; column-0 comments after it belong to what
+        follows (the next concept's leading comments, or the end of the file)."""
+        nonlocal held, pending, pending_gap
+        if not held or current is None:
+            held = []
+            return
+        last = max((i for i, c in enumerate(held) if not c.col0), default=-1)
+        current.statements.extend(held[: last + 1])
+        tail, held = held[last + 1 :], []
+        if tail:
+            pending, pending_gap = [], tail[0].blank_before
+            for i, c in enumerate(tail):
+                if i:
+                    pending.extend([""] * c.blank_before)
+                pending.append(c.raw)
+
     def take_pending() -> list[Statement]:
         """The column-0 comments waiting for a place, as comment lines."""
         nonlocal pending, pending_gap
@@ -190,9 +208,13 @@ def loads(text: str) -> Ontology:
             elif statement.kind != "comment":
                 last_prop = None
             continue
+        if held and current is not None and line.startswith("#"):
+            comment = parse_statement(line)
+            comment.raw, comment.col0, comment.blank_before = typed, True, gap
+            held.append(comment)
+            continue
         if held and current is not None:
-            current.statements.extend(held)
-            held = []
+            release_held()
         if current is None and onto.preamble:
             onto.preamble.extend([("blank", "", "")] * gap)
         if line.startswith("#"):
@@ -251,8 +273,7 @@ def loads(text: str) -> Ontology:
             onto.preamble.append(("source", m[1], typed))
             continue
         raise ParseError(no, "expected concept, prefix, source or a # comment", raw)
-    if held and current is not None:
-        current.statements.extend(held)
+    release_held()
     onto.trailing_comments = pending
     onto.trailing_blank_before = pending_gap
     onto.final_newline = text.endswith("\n") or not text
@@ -284,8 +305,10 @@ def dump_statement(statement: Statement, indent: str = "  ", tail: bool = False)
     return lines
 
 
-def dump_concept(concept: Concept) -> list[str]:
-    lines = list(concept.leading_comments)
+def dump_concept(concept: Concept, first: bool = False) -> list[str]:
+    # Comments above the first concept read back as its own only when nothing
+    # separates them from it (otherwise they would join the file header).
+    lines = [x for x in concept.leading_comments if x] if first else list(concept.leading_comments)
     header = concept.header()
     if concept.raw_header and _split_tag(concept.raw_header)[1] == concept.tag:
         header = concept.raw_header
@@ -330,9 +353,12 @@ def _preamble(onto: Ontology) -> list[str]:
 
 def dumps(onto: Ontology) -> str:
     out = [""] * onto.leading_blanks + _preamble(onto)
-    for concept in onto.concepts.values():
-        out.extend([""] * (concept.blank_before if out else 0))
-        out.extend(dump_concept(concept))
+    for i, concept in enumerate(onto.concepts.values()):
+        gap = concept.blank_before if out else 0
+        if i == 0 and out and any(concept.leading_comments):
+            gap = max(gap, 1)  # keep its comments apart from the header
+        out.extend([""] * gap)
+        out.extend(dump_concept(concept, first=i == 0))
     if onto.trailing_comments:
         out.extend([""] * onto.trailing_blank_before)
         out.extend(onto.trailing_comments)

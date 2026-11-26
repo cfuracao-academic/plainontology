@@ -90,7 +90,15 @@ _ALTER_TYPE = re.compile(
     re.I,
 )
 _UNSIGNED = {"UTINYINT", "USMALLINT", "UMEDIUMINT", "UINT", "UBIGINT", "UDECIMAL", "UDOUBLE", "UFLOAT"}
-_FLOAT_UNSIGNED = re.compile(r"\b((?:FLOAT|DOUBLE(?:\s+PRECISION)?|REAL)(?:\s*\([^)]*\))?)\s+UNSIGNED\b", re.I)
+_FLOAT_UNSIGNED = re.compile(r"\b(?:FLOAT|DOUBLE(?:\s+PRECISION)?|REAL)(\s*\([^)]*\))?\s+UNSIGNED\b", re.I)
+
+
+def _outside_quotes(sql: str, change) -> str:
+    """Apply ``change`` to the parts of ``sql`` outside quoted strings and identifiers."""
+    parts = re.split(r"('(?:[^'\\]|\\.|'')*'|`[^`]*`|\"[^\"]*\")", sql)
+    return "".join(part if i % 2 else change(part) for i, part in enumerate(parts))
+
+
 _WITH_DATA = re.compile(r"\bWITH\s+(?:NO\s+)?DATA\s*;", re.I)
 # MySQL view modifiers the SQL parser does not know; they change nothing about the columns.
 _MYSQL_VIEW_MODIFIERS = re.compile(
@@ -430,7 +438,12 @@ class _Reader:
         t.primary_key = [c for c in t.primary_key if c != name]
         t.foreign_keys = [fk for fk in t.foreign_keys if name not in fk.columns]
         t.unique.discard(name)
-        t.unique_sets = [u for u in t.unique_sets if name not in u]
+        if self.dialect == "mysql":  # MySQL removes the column from the key; the rest stays unique
+            shrunk = [[c for c in u if c != name] for u in t.unique_sets]
+            t.unique |= {u[0] for u in shrunk if len(u) == 1}
+            t.unique_sets = [u for u in shrunk if len(u) > 1]
+        else:
+            t.unique_sets = [u for u in t.unique_sets if name not in u]
         t.checks = [sql for sql in t.checks if name not in self._check_columns(sql)]  # dropped with the column
         for key, (kind, value) in list(self.constraint_names.items()):
             if key[0] != t.name:
@@ -449,6 +462,11 @@ class _Reader:
             del self.constraint_names[key]
         self.check_count.pop(table, None)
 
+    def rename_constraint(self, table: str, old: str, new: str) -> None:
+        found = self.constraint_names.pop((table, old.lower()), None)
+        if found is not None:
+            self.constraint_names[(table, new.lower())] = found
+
     def rename_table(self, old: str, new: str) -> None:
         if old not in self.tables:
             return
@@ -465,8 +483,14 @@ class _Reader:
 
     def alter(self, node) -> None:
         name = self.qual(node.this)
+        if name not in self.tables:
+            self.warnings.append(f"ALTER TABLE {name}: no such table in the file; skipped")
+            return
         t = self.table(name)
         for action in node.args.get("actions") or []:
+            if _is(action, "RenameIndex") and action.this is not None and action.args.get("to") is not None:
+                self.rename_constraint(name, action.this.name, action.args["to"].name)
+                continue
             if _is(action, "AddConstraint"):
                 for item in action.expressions:
                     self.constraint(t, item)
@@ -633,6 +657,13 @@ class _Reader:
                 self.drop_index(dropped.name, owner, db.name if db is not None and self.dialect != "mysql" else None)
         elif isinstance(node, exp.Command) and str(node.this).upper() == "ALTER":
             self.alter_command(str(node.expression or ""))
+        elif isinstance(node, exp.Command) and str(node.this).upper() == "RENAME":
+            text = " ".join(str(getattr(node.expression, "this", node.expression) or "").split())
+            pairs = re.match(r"^TABLE\s+(.*)$", text, re.I)
+            for pair in pairs[1].split(",") if pairs else []:
+                parts = re.split(r"\s+TO\s+", pair.strip(), flags=re.I)
+                if len(parts) == 2:
+                    self.rename_table(self.qual_text(parts[0]), self.qual_text(parts[1]))
         elif isinstance(node, exp.Drop) and (node.args.get("kind") or "").upper() in ("TABLE", "VIEW"):
             for target in node.args.get("tables") or []:
                 name = self.qual(target)
@@ -653,13 +684,33 @@ class _Reader:
         owners = (
             [table] if table else [tn for (tn, cn) in self.constraint_names if cn == name.lower() and in_schema(tn)]
         )
+        if not owners and not table and schema is None:  # SET search_path: a single match anywhere
+            anywhere = [tn for (tn, cn) in self.constraint_names if cn == name.lower()]
+            owners = anywhere if len(anywhere) == 1 else []
+            if len(anywhere) > 1:
+                self.warnings.append(f"DROP INDEX {name}: more than one schema has it; nothing dropped")
         for owner in owners:
             if owner in self.tables and (owner, name.lower()) in self.constraint_names:
                 self.drop_constraint(self.tables[owner], name)
 
     def alter_command(self, text: str) -> None:
-        """ALTER statements the parser keeps as text: PostgreSQL ALTER TYPE on an enum."""
+        """ALTER statements the parser keeps as text: PostgreSQL ALTER TYPE on an enum,
+        ALTER TABLE ... SET SCHEMA and ALTER TABLE ... RENAME CONSTRAINT."""
         flat = " ".join(text.split())
+        table = re.match(r"^TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?([\w.\"`]+)\s+(.*)$", flat, re.I)
+        if table:
+            name, rest = self.qual_text(table[1]), table[2]
+            schema = re.match(r"^SET\s+SCHEMA\s+([\w\"]+)$", rest, re.I)
+            renamed = re.match(r"^RENAME\s+CONSTRAINT\s+([\w\"]+)\s+TO\s+([\w\"]+)$", rest, re.I)
+            if schema:
+                bare = name.split(".")[-1]
+                new_schema = schema[1].strip('"')
+                self.rename_table(
+                    name, qualified(new_schema.lower() if '"' not in schema[1] else new_schema, bare, self.defaults)
+                )
+            elif renamed and name in self.tables:
+                self.rename_constraint(name, renamed[1].strip('"'), renamed[2].strip('"'))
+            return
         m = _ALTER_TYPE.match(flat)
         if not m:
             renamed = re.match(r"^TYPE\s+([\w.\"]+)\s+RENAME\s+TO\s+([\w\"]+)$", flat, re.I)
@@ -834,7 +885,8 @@ class _Reader:
             sql = _DELIMITER.sub("", sql).replace(";;", ";")
             sql = _MYSQL_VIEW_MODIFIERS.sub(lambda m: f"CREATE {m[1] or ''}VIEW", sql)
             sql = _CHARSET_INTRODUCER.sub("'", sql)  # _utf8mb4'text' is just 'text'
-            sql = _FLOAT_UNSIGNED.sub(r"\1 /*unsigned*/", sql)  # the parser does not take float unsigned
+            # The parser does not take float unsigned; decimal unsigned is read (same datatype, min 0).
+            sql = _outside_quotes(sql, lambda part: _FLOAT_UNSIGNED.sub(r"DECIMAL\1 UNSIGNED", part))
         if self.dialect == "postgres":
             sql = _E_STRING.sub(_plain_string, sql)  # E'\\d' is '\d'
         # CREATE MATERIALIZED VIEW ... WITH [NO] DATA: the parser stops at the data clause.
