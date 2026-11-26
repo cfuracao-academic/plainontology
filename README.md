@@ -1,5 +1,10 @@
 # PlainOntology
 
+[![CI](https://github.com/cfuracao-academic/plainontology/actions/workflows/ci.yml/badge.svg)](https://github.com/cfuracao-academic/plainontology/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/plainontology)](https://pypi.org/project/plainontology/)
+[![Python](https://img.shields.io/badge/python-3.10%20to%203.13-blue)](pyproject.toml)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-green)](LICENSE)
+
 **Write down the ontology your system already has, as one plain text file that people can edit and AI agents can read.**
 
 Every running system carries an implicit ontology: tables and foreign keys, JSON schemas, the tool definitions an LLM agent calls. Its meaning (what a "loan" is, that a "Title" is a "Book", that `member` holds personal data) usually lives in people's heads. PlainOntology extracts the structure into a readable text file, keeps your hand-written meaning next to it, and tells you when the system drifts away from it.

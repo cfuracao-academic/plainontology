@@ -23,3 +23,9 @@ pytest
 2. Tag every concept and statement it produces with `Tag("auto", ...)`.
 3. Register it in `EXTRACTORS` in `src/plainontology/extract/__init__.py`.
 4. Add an example under `examples/` and tests under `tests/`.
+
+## Releasing
+
+1. Set the new version in `pyproject.toml`, `src/plainontology/__init__.py` and `CITATION.cff` (a test checks they match), and add a CHANGELOG entry.
+2. Commit and push to `main`; wait for CI to pass.
+3. Create a GitHub release with the tag `vX.Y.Z`. The release workflow builds the package and uploads it to PyPI, and Zenodo mints a DOI for the release.
