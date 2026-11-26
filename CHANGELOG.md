@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 (2026-11-26)
+
+- README: demo GIF drawn from real command output, and a "Try it" line (now also shown on PyPI)
+- README: badges and Zenodo DOI; DOI added to CITATION.cff
+- No code changes
+
 ## 0.1.0 (2026-11-26)
 
 First release.
