@@ -16,6 +16,8 @@
 **Refresh**
 - Renamed concepts and properties are recognised and your lines move with them (`>` in the report); `plainonto rename` for the cases it cannot guess
 - A property that is gone from the sources but holds your lines is kept
+- `--no-renames` on `refresh` and `drift` turns rename detection off
+- A warning (`?`) when two sources define the same concept, with the number of lines that differ; before, they were combined silently
 
 **Validate and export**
 - `validate` enforces the rules and accepts any subtype for a nested object

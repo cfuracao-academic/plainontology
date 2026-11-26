@@ -79,11 +79,28 @@ def extract(spec: str, base_dir: Path) -> list[Concept]:
     return EXTRACTORS[kind](location, base_dir)
 
 
+def _shared(name: str, first: str, second: str) -> bool:
+    """Concepts every tools file defines on purpose (the ``Tool`` parent)."""
+    return name == "Tool" and first.startswith("tools:") and second.startswith("tools:")
+
+
 def extract_all(sources: list[str], base_dir: Path) -> Ontology:
-    """Run every source and fold the results into one ontology of [auto] lines."""
+    """Run every source and fold the results into one ontology of [auto] lines.
+
+    When two sources define a concept with the same name, their lines are
+    combined (the first source wins where both define the same line) and a
+    warning is recorded in ``Ontology.warnings``.
+    """
     onto = Ontology()
+    origin: dict[str, str] = {}
     for spec in sources:
         for concept in extract(spec, base_dir):
+            first = origin.setdefault(concept.name, spec)
+            if first != spec and not _shared(concept.name, first, spec):
+                existing = {s.key(): s for s in onto.concepts[concept.name].statements}
+                clashes = sum(1 for s in concept.statements if s.key() in existing and existing[s.key()].body() != s.body())
+                detail = f"; {clashes} line(s) differ and the first source wins" if clashes else ""
+                onto.warnings.append((concept.name, f"defined by both {first} and {spec}; their lines are combined{detail}"))
             onto.add_concept(concept)
     return onto
 

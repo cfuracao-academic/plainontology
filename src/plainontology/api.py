@@ -37,18 +37,18 @@ def init(file_path: Path, sources: list[str]) -> tuple[Ontology, DriftReport]:
     return merged, report
 
 
-def compare(file_path: Path) -> tuple[Ontology, Ontology, DriftReport]:
+def compare(file_path: Path, renames: bool = True) -> tuple[Ontology, Ontology, DriftReport]:
     """Return (current, merged, report) without writing anything."""
     current = load(file_path)
     if not current.sources:
         raise ValueError(f"{file_path} has no 'source' lines, so there is nothing to refresh from")
     fresh = extract_all(current.sources, file_path.resolve().parent)
-    merged, report = merge(current, fresh)
+    merged, report = merge(current, fresh, renames=renames)
     return current, merged, report
 
 
-def refresh(file_path: Path) -> DriftReport:
-    _, merged, report = compare(file_path)
-    if report.changes:
+def refresh(file_path: Path, renames: bool = True) -> DriftReport:
+    _, merged, report = compare(file_path, renames=renames)
+    if report.has_drift:
         save(file_path, merged)
     return report

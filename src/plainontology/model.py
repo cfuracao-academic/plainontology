@@ -187,6 +187,8 @@ class Ontology:
     sources: list[str] = field(default_factory=list)
     concepts: dict[str, Concept] = field(default_factory=dict)
     trailing_comments: list[str] = field(default_factory=list)
+    # (concept, message) pairs found while extracting; never written to the file
+    warnings: list[tuple[str, str]] = field(default_factory=list)
 
     def add_concept(self, concept: Concept) -> Concept:
         """Add a concept, folding its statements into an existing one of the same name."""

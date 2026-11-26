@@ -108,8 +108,9 @@ When `plainonto refresh` re-extracts the sources:
 3. If a person's line has the same key as an extracted line, the person's line wins and the extracted line is not written. The drift report shows both (`=`).
 4. Lines under a property follow the same rules. If you rewrote a property line, extracted rules still arrive under your line.
 5. A concept or property that is gone from the sources is removed if it was extracted and holds none of your lines. If it holds your lines, it is kept, its tag is removed, and the report says so (`!`).
-6. **Renames.** If an extracted concept holding your lines disappears and exactly one new concept appears with at least 60% of the same properties (and at least two in common), it is a rename: your lines move to the new name, in the old place (`>`). If an extracted property holding your lines disappears and exactly one new property of the same kind and type appears in that concept, your lines move to it (`>`). Anything less certain is reported, not guessed; use `plainonto rename` for those.
-7. Refresh is idempotent: running it twice changes nothing the second time.
+6. **Renames.** If an extracted concept holding your lines disappears and exactly one new concept appears with at least 60% of the same properties (and at least two in common), it is a rename: your lines move to the new name, in the old place (`>`). If an extracted property holding your lines disappears and exactly one new property of the same kind and type appears in that concept, your lines move to it (`>`). Anything less certain is reported, not guessed; use `plainonto rename` for those. `--no-renames` on `refresh` and `drift` turns rename detection off.
+7. If two sources define a concept with the same name, their lines are combined, the first source wins where both define the same line, and the report warns (`?`). A warning is not drift.
+8. Refresh is idempotent: running it twice changes nothing the second time.
 
 ## Drift report symbols
 
@@ -121,6 +122,7 @@ When `plainonto refresh` re-extracts the sources:
 | `>` | renamed in the sources; your lines moved with it |
 | `=` | your line kept over a different extracted line (not counted as drift) |
 | `!` | gone from the sources, kept because it holds your lines |
+| `?` | warning, for example two sources define the same concept (not counted as drift) |
 
 ## Exports
 

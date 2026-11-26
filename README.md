@@ -41,8 +41,8 @@ Lines tagged `[auto]` come from the sources and are refreshed. **Every other lin
 |---|---|
 | **Extract** | PostgreSQL, MySQL and SQLite (live databases or schema dumps), JSON Schema (draft 7 and 2020-12, across files), and LLM tool definitions (Anthropic, OpenAI Chat and Responses, MCP `tools/list`) |
 | **Keep your edits** | Refresh replaces `[auto]` lines only. If you rewrite an extracted line, your version wins and is reported |
-| **Follow renames** | A renamed table or column keeps your lines; `plainonto rename` handles the cases it cannot guess |
-| **Report drift** | `plainonto drift` exits 1 when the sources changed, so it can gate CI |
+| **Follow renames** | A renamed table or column keeps your lines; `plainonto rename` handles the cases it cannot guess, and `--no-renames` turns the guessing off |
+| **Report drift** | `plainonto drift` exits 1 when the sources changed, so it can gate CI; it also warns when two sources define the same concept |
 | **Check** | Duplicate lines, unknown targets, undeclared prefixes, misplaced rules, proposals waiting for review |
 | **Validate** | Check JSON records (for example an agent's structured output) against a concept: types, enums, required fields, min, max, length, pattern, format |
 | **Multilingual** | Labels, definitions and synonyms in any language (`label "Livre"@fr`) |

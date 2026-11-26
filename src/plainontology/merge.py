@@ -36,7 +36,11 @@ _SYMBOLS = {
     "property_kept": "!",
     "concept_renamed": ">",
     "property_renamed": ">",
+    "warning": "?",
 }
+
+# Report lines that are not drift: nothing about the sources changed.
+_NOT_DRIFT = ("kept_yours", "warning")
 
 RENAME_SIMILARITY = 0.6
 
@@ -66,6 +70,8 @@ class Change:
             return f"{sym} {self.concept}: {self.line}  (was: {self.previous})"
         if self.kind == "kept_yours":
             return f"{sym} {self.concept}: kept your line {self.line}  (sources say: {self.previous})"
+        if self.kind == "warning":
+            return f"{sym} warning: concept {self.concept} is {self.line}"
         return f"{sym} {self.concept}: {self.line}"
 
 
@@ -75,7 +81,11 @@ class DriftReport:
 
     @property
     def has_drift(self) -> bool:
-        return any(c.kind != "kept_yours" for c in self.changes)
+        return any(c.kind not in _NOT_DRIFT for c in self.changes)
+
+    @property
+    def warnings(self) -> list[Change]:
+        return [c for c in self.changes if c.kind == "warning"]
 
     def add(self, kind: str, concept: str, line: str, previous: str = "") -> None:
         self.changes.append(Change(kind, concept, line, previous))
@@ -84,11 +94,16 @@ class DriftReport:
         if not self.changes:
             return "No drift: the file matches its sources."
         lines = [c.render() for c in self.changes]
-        drift = sum(1 for c in self.changes if c.kind != "kept_yours")
-        kept = len(self.changes) - drift
+        drift = sum(1 for c in self.changes if c.kind not in _NOT_DRIFT)
+        kept = sum(1 for c in self.changes if c.kind == "kept_yours")
+        warned = len(self.warnings)
+        if drift == 0 and kept == 0:
+            return "\n".join(lines + ["", f"No drift; {warned} warning(s)."])
         summary = f"{drift} change(s) from the sources"
         if kept:
             summary += f", {kept} line(s) of yours kept over the sources"
+        if warned:
+            summary += f", {warned} warning(s)"
         return "\n".join(lines + ["", summary + "."])
 
 
@@ -208,8 +223,12 @@ def _concept_renames(current: Ontology, fresh: Ontology) -> dict[str, str]:
     return renames
 
 
-def merge(current: Ontology, fresh: Ontology) -> tuple[Ontology, DriftReport]:
-    """Return the merged ontology and what changed. Neither input is modified."""
+def merge(current: Ontology, fresh: Ontology, renames: bool = True) -> tuple[Ontology, DriftReport]:
+    """Return the merged ontology and what changed. Neither input is modified.
+
+    With ``renames=False`` nothing is treated as a rename: a renamed table is
+    reported as one concept gone (kept if it holds your lines) and one added.
+    """
     out = Ontology(
         comments=list(current.comments),
         prefixes=dict(current.prefixes),
@@ -219,7 +238,10 @@ def merge(current: Ontology, fresh: Ontology) -> tuple[Ontology, DriftReport]:
     for prefix, iri in fresh.prefixes.items():
         out.prefixes.setdefault(prefix, iri)
     report = DriftReport()
-    renames = _concept_renames(current, fresh)
+    for concept, message in fresh.warnings:
+        report.add("warning", concept, message)
+    detect_renames = renames
+    renames = _concept_renames(current, fresh) if detect_renames else {}
     renamed_to = set(renames.values())
 
     order: list[tuple[str, str]] = []  # (old name or "", new name)
@@ -253,7 +275,7 @@ def merge(current: Ontology, fresh: Ontology) -> tuple[Ontology, DriftReport]:
             report.add("concept_kept", name, old.header())
             continue
 
-        statements = _merge_lines(old.statements, new.statements, name, report)
+        statements = _merge_lines(old.statements, new.statements, name, report, renames=detect_renames)
         out.concepts[name] = Concept(name, new.tag, statements, list(old.leading_comments))
 
     return out, report

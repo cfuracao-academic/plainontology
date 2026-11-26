@@ -20,20 +20,22 @@ def _cmd_init(args) -> int:
     if path.exists() and not args.force:
         print(f"{path} already exists; use 'plainonto refresh' or pass --force", file=sys.stderr)
         return 2
-    onto, _ = init(path, args.sources)
+    onto, report = init(path, args.sources)
     props = sum(len(c.properties()) for c in onto.concepts.values())
     print(f"Wrote {path}: {len(onto.concepts)} concepts, {props} properties from {len(onto.sources)} source(s).")
+    for warning in report.warnings:
+        print(warning.render())
     return 0
 
 
 def _cmd_refresh(args) -> int:
-    report = refresh(Path(args.file))
+    report = refresh(Path(args.file), renames=not args.no_renames)
     print(report.render())
     return 0
 
 
 def _cmd_drift(args) -> int:
-    _, _, report = compare(Path(args.file))
+    _, _, report = compare(Path(args.file), renames=not args.no_renames)
     print(report.render())
     return 1 if report.has_drift else 0
 
@@ -113,12 +115,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--force", action="store_true", help="overwrite an existing file")
     s.set_defaults(func=_cmd_init)
 
+    no_renames = "never treat a vanished concept or property as renamed; report it as gone and added instead"
     s = sub.add_parser("refresh", help="re-extract from the file's sources; your lines are kept")
     s.add_argument("file")
+    s.add_argument("--no-renames", action="store_true", help=no_renames)
     s.set_defaults(func=_cmd_refresh)
 
     s = sub.add_parser("drift", help="report what changed in the sources without writing (exit 1 on drift)")
     s.add_argument("file")
+    s.add_argument("--no-renames", action="store_true", help=no_renames)
     s.set_defaults(func=_cmd_drift)
 
     s = sub.add_parser("check", help="check the file for duplicates, unknown targets and pending proposals")
