@@ -77,7 +77,8 @@ def _datatype(sqltype, dialect, domains: dict[str, str] | None = None) -> tuple[
         return _datatype(sqltype.item_type, dialect, domains)[0], True, None, ""
     if getattr(sqltype, "data_type", None) is not None and type(sqltype).__name__ == "DOMAIN":
         datatype, many, length, pattern = _datatype(sqltype.data_type, dialect, domains)
-        declared = (domains or {}).get(str(getattr(sqltype, "name", "")).lower())
+        domain_name = str(getattr(sqltype, "name", "") or "").split(".")[-1].strip('"').lower()
+        declared = (domains or {}).get(domain_name)
         if length is None and declared:
             length = declared_length(declared)
         if getattr(sqltype, "check", None) is not None:
@@ -185,9 +186,11 @@ def tables_from_database(url: str) -> list[Table]:
         if engine.dialect.name == "postgresql":
             schemas = [s for s in insp.get_schema_names() if not _PG_SYSTEM.match(s)]
             schemas.sort(key=lambda s: (s != default, s))
-            for d in _safe(lambda: insp.get_domains(schema="*"), []) or []:
-                if d.get("name") and d.get("type"):
-                    domains[str(d["name"]).lower()] = str(d["type"])
+            with engine.connect() as conn:
+                rows = conn.execute(sa.text(
+                    "SELECT t.typname, format_type(t.typbasetype, t.typtypmod) FROM pg_catalog.pg_type t "
+                    "WHERE t.typtype = 'd'"))
+                domains = {str(name).lower(): str(declared) for name, declared in rows}
         else:
             schemas = [None]
         tables: list[Table] = []

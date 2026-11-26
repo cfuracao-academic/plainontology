@@ -5,6 +5,7 @@
 **New sources**
 - `postgres:` and `mysql:` (MySQL and MariaDB): schema dumps read in their own dialect, or live databases read-only through SQLAlchemy. Live URLs come from an environment variable (`postgres:env:DATABASE_URL`); a URL with a password is refused so it is never saved in the file. CI checks that live and dump reading give the same result on real PostgreSQL 16 and MySQL 8.4 servers
 - All SQL sources now read table and column comments, CHECK constraints (as enums, `min`, `max`, `length`, `pattern`, or notes), views, triggers, non-default schemas, PostgreSQL domains and composite types, `varchar(n)` lengths, multi-column unique constraints, and join tables with extra columns
+- Dumps apply `ALTER TABLE` column changes (add, drop, rename, MySQL `CHANGE`/`MODIFY`) and table renames in order, so migration scripts work as a source
 - JSON Schema: references to other files, `oneOf`/`anyOf` unions (a parent concept the options belong to, or a merged enum), and constraints (`minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, exclusive bounds)
 
 **Format 0.2** (every 0.1 file is still valid)

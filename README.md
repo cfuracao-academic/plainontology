@@ -92,6 +92,7 @@ Sources are written `KIND:LOCATION` and stored in the file; file paths are relat
 | enums, domains, arrays, `tinyint(1)` | `enum(...)`, the domain's type and rules, `many`, `boolean` |
 | join tables | a `many` relation; a join table with extra columns also stays a concept |
 | triggers | notes |
+| `ALTER TABLE` (add, drop, rename and change columns, rename tables) | applied in order, so a folder of migration scripts concatenated into one file works as a dump |
 
 Everything else in a dump (`SET`, data, functions) is skipped. For a live database:
 
