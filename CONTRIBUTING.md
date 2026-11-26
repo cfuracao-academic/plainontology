@@ -1,0 +1,25 @@
+# Contributing
+
+Thanks for helping. Issues and pull requests are welcome.
+
+## Set up
+
+```bash
+python -m venv .venv
+.venv/bin/pip install -e ".[dev]"     # Windows: .venv\Scripts\pip
+pytest
+```
+
+## Ground rules
+
+1. **Never overwrite a person's line.** Any change to merge must keep the refresh rules in [SPEC.md](SPEC.md) and the tests in `tests/test_merge.py` passing.
+2. **Keep the core dependency-free.** Only the standard library in `src/plainontology`, except `mcp_server.py`. New extractors that need a library go behind an optional extra.
+3. **Format changes need a spec change.** If the text format changes, update SPEC.md in the same pull request.
+4. **Test with public data only.** Examples and fixtures must be public or made up.
+
+## Adding an extractor
+
+1. Add `src/plainontology/extract/<kind>.py` with a function `extract_<kind>(path: Path) -> list[Concept]`.
+2. Tag every concept and statement it produces with `Tag("auto", ...)`.
+3. Register it in `EXTRACTORS` in `src/plainontology/extract/__init__.py`.
+4. Add an example under `examples/` and tests under `tests/`.

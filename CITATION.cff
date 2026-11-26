@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "PlainOntology: the ontology and semantic layer of a running system as one plain text file"
+abstract: "PlainOntology extracts the implicit ontology of a running system (database schemas, JSON Schema, LLM tool definitions) into a plain text file, keeps hand-written semantic lines across re-extraction, reports drift, exports to OWL/SKOS and LinkML, and serves the file to AI agents over the Model Context Protocol."
+authors:
+  - family-names: "Furacão"
+    given-names: "Christopher"
+    orcid: "https://orcid.org/0009-0001-4154-6267"
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/cfuracao-academic/plainontology"
+keywords:
+  - ontology
+  - semantic layer
+  - knowledge graph
+  - SKOS
+  - LinkML
+  - schema drift
+  - Model Context Protocol

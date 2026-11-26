@@ -1,0 +1,29 @@
+[
+  {
+    "name": "search_catalogue",
+    "description": "Search the library catalogue by free text, optionally narrowed by author or publication date.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string", "description": "Words to look for in titles and tags." },
+        "author": { "type": "string", "description": "Author name, exact or partial." },
+        "published_after": { "type": "string", "format": "date" },
+        "limit": { "type": "integer", "description": "Maximum number of results." }
+      },
+      "required": ["query"]
+    }
+  },
+  {
+    "name": "reserve_book",
+    "description": "Reserve a book for a member to collect.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "book_id": { "type": "integer" },
+        "member": { "type": "string", "description": "Library card number." },
+        "pickup": { "type": "string", "enum": ["desk", "locker"] }
+      },
+      "required": ["book_id", "member"]
+    }
+  }
+]

@@ -1,0 +1,61 @@
+# PlainOntology file, format 0.1
+# Lines ending in [auto] come from the sources below and are refreshed by `plainonto refresh`.
+# Every other line is yours and is never overwritten. Format: see SPEC.md in the PlainOntology repo.
+
+prefix : <https://example.org/library#>
+source sqlite:library.sql
+source tools:agent-tools.json
+
+concept Author [auto: sqlite table authors]
+  has id : integer key [auto]
+  has name : text required [auto]
+  has born : date [auto]
+  has country : text [auto]
+  label "Writer"
+  definition "A person credited with writing at least one book in the catalogue."
+  same_as schema:Person
+
+concept Book [auto: sqlite table books]
+  has id : integer key [auto]
+  has title : text required [auto]
+  has isbn : text unique "ISBN-13 without hyphens."
+  has published : date [auto]
+  has in_print : boolean [auto]
+  author -> Author required [auto: fk books.author_id]
+  tags -> Tag many [auto: via book_tags]
+  definition "A title the library holds; one record per edition."
+  synonym "Title"
+  same_as schema:Book
+
+concept Tag [auto: sqlite table tags]
+  has id : integer key [auto]
+  has label : text required unique [auto]
+
+# Loans are the only table with personal data (member).
+concept Loan [auto: sqlite table loans]
+  has id : integer key [auto]
+  has member : text required [auto]
+  has loaned_at : datetime required [auto]
+  has returned_at : datetime [auto]
+  book -> Book required [auto: fk loans.book_id]
+  definition "One book lent to one member, open until returned_at is set."
+  synonym "Checkout"
+  note "A loan is overdue 21 days after loaned_at."
+
+concept Tool [auto: tools agent-tools.json]
+  definition "An action an AI agent can call; its properties are the call's input." [auto]
+
+concept SearchCatalogue [auto: tools agent-tools.json search_catalogue]
+  is_a Tool [auto]
+  definition "Search the library catalogue by free text, optionally narrowed by author or publication date." [auto]
+  has query : text required "Words to look for in titles and tags." [auto]
+  has author : text "Author name, exact or partial." [auto]
+  has published_after : date [auto]
+  has limit : integer "Maximum number of results." [auto]
+
+concept ReserveBook [auto: tools agent-tools.json reserve_book]
+  is_a Tool [auto]
+  definition "Reserve a book for a member to collect." [auto]
+  has book_id : integer required [auto]
+  has member : text required "Library card number." [auto]
+  has pickup : enum(desk|locker) [auto]

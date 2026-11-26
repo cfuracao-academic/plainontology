@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Article",
+  "description": "A published piece of writing in a magazine issue.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string" },
+    "headline": { "type": "string", "description": "Title shown on the card." },
+    "published": { "type": "string", "format": "date-time" },
+    "status": { "enum": ["draft", "in review", "live"] },
+    "word_count": { "type": ["integer", "null"] },
+    "authors": { "type": "array", "items": { "$ref": "#/$defs/Person" } },
+    "issue": {
+      "type": "object",
+      "properties": {
+        "volume": { "type": "integer" },
+        "month": { "type": "string" }
+      },
+      "required": ["volume"]
+    },
+    "keywords": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["id", "headline", "status"],
+  "$defs": {
+    "Person": {
+      "type": "object",
+      "description": "Someone credited on an article.",
+      "properties": {
+        "name": { "type": "string" },
+        "orcid": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "Editor": {
+      "allOf": [
+        { "$ref": "#/$defs/Person" },
+        { "properties": { "desk": { "type": "string" } } }
+      ]
+    }
+  }
+}
