@@ -6,6 +6,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -176,7 +177,16 @@ def end_anchored(pattern: str) -> str:
             continue
         if ch == "[" and not in_class:
             in_class = True
-        elif ch == "]" and in_class:
+            out.append(ch)
+            i += 1
+            if pattern[i : i + 1] == "^":
+                out.append("^")
+                i += 1
+            if pattern[i : i + 1] == "]":  # a ] first in a class is a literal ]
+                out.append("]")
+                i += 1
+            continue
+        if ch == "]" and in_class:
             in_class = False
         out.append("\\Z" if ch == "$" and not in_class else ch)
         i += 1
@@ -196,8 +206,8 @@ def _rules(where: str, s: Statement, value: Any) -> list[str]:
         if rule.is_proposed:
             continue  # proposals do not count until a person accepts them
         if rule.kind in ("min", "max") and isinstance(value, (int, float)) and not isinstance(value, bool):
-            bound = float(rule.value)
-            if (rule.kind == "min" and value < bound) or (rule.kind == "max" and value > bound):
+            bound, number = Decimal(rule.value), Decimal(str(value))  # exact, also past 2**53
+            if (rule.kind == "min" and number < bound) or (rule.kind == "max" and number > bound):
                 out.append(
                     f"{where}: {value} is {'below the minimum' if rule.kind == 'min' else 'above the maximum'} "
                     f"{rule.value}"
@@ -206,8 +216,14 @@ def _rules(where: str, s: Statement, value: Any) -> list[str]:
             low, high = length_bounds(rule.value)
             if (low is not None and len(value) < low) or (high is not None and len(value) > high):
                 out.append(f"{where}: length {len(value)} is outside {rule.value}")
-        elif rule.kind == "pattern" and isinstance(value, str) and not re.search(end_anchored(rule.value), value):
-            out.append(f"{where}: '{value}' does not match the pattern {rule.value}")
+        elif rule.kind == "pattern" and isinstance(value, str):
+            try:
+                matched = re.search(end_anchored(rule.value), value) is not None
+            except re.error as exc:
+                out.append(f"{where}: the pattern {rule.value} cannot be used ({exc})")
+                continue
+            if not matched:
+                out.append(f"{where}: '{value}' does not match the pattern {rule.value}")
         elif rule.kind == "format" and isinstance(value, str) and not _format_ok(rule.name, value):
             out.append(f"{where}: '{value}' is not a valid {rule.name}")
     return out
@@ -249,7 +265,9 @@ def _check_value(onto: Ontology, where: str, s: Statement, value: Any, depth: in
     elif t == "integer":
         ok = isinstance(value, int) and not isinstance(value, bool)
     elif t == "decimal":
-        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        ok = (isinstance(value, int) and not isinstance(value, bool)) or (
+            isinstance(value, float) and math.isfinite(value)
+        )
     elif t == "boolean":
         ok = isinstance(value, bool)
     elif t in ("date", "datetime"):
@@ -272,8 +290,12 @@ def validate_record(onto: Ontology, concept_name: str, record: Any, depth: int =
     """Check a JSON object against a concept: unknown fields, missing required
     fields, wrong types, enum values, rules (min, max, length, pattern, format)
     and nested objects. Returns problems found."""
+    whole = onto
+    onto = onto.accepted()  # proposals do not count until a person accepts them
     concept: Concept | None = onto.find(concept_name)
     if concept is None:
+        if whole.find(concept_name) is not None:
+            return [f"concept '{concept_name}' is still [proposed]; accept it before validating against it"]
         return [f"unknown concept '{concept_name}'"]
     if not isinstance(record, dict):
         return [f"{prefix}{concept.name}: a record must be a JSON object"]

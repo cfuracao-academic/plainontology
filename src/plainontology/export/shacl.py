@@ -11,8 +11,9 @@ export). Each property becomes a ``sh:property`` with:
 * ``sh:pattern`` from pattern, and from the email, uri and uuid formats
 * ``sh:name`` / ``sh:description`` from the property's labels and description
 
-Inherited properties are checked by the parent's shape: SHACL applies a
-class's shape to instances of its subclasses.
+Inherited properties are checked too: a concept's shape refers to its parents'
+shapes with ``sh:node``, so the shapes file needs no class hierarchy beside it.
+MySQL's case-insensitive patterns (``(?i)...``) use ``sh:flags "i"``.
 """
 
 from __future__ import annotations
@@ -77,7 +78,11 @@ def _property(n: Namer, c: Concept, s: Statement) -> str:
                 patterns.append(rule.value)
             elif rule.kind == "format" and rule.name in FORMAT_PATTERNS:
                 patterns.append(FORMAT_PATTERNS[rule.name])
-        parts += [f"sh:pattern {literal(p)}" for p in patterns]
+        for p in patterns:
+            if p.startswith("(?i)"):  # XPath regex has no inline flags: use sh:flags
+                parts.append(f'sh:node [ sh:pattern {literal(p[4:])} ; sh:flags "i" ]')
+            else:
+                parts.append(f"sh:pattern {literal(p)}")
     return "[\n        " + " ;\n        ".join(parts) + "\n    ]"
 
 
@@ -90,6 +95,9 @@ def to_shacl(onto: Ontology, base: str | None = None) -> str:
         pairs = [("a", "sh:NodeShape"), ("sh:targetClass", n.iri(c.name))]
         if c.definition():
             pairs.append(("rdfs:comment", literal(c.definition())))
+        # A subclass's instances must also satisfy the parent's shape (sh:node), so
+        # inherited properties are checked with this shapes file alone.
+        pairs += [("sh:node", n.iri(s.name + "Shape")) for s in c.all("is_a") if s.name in onto.concepts]
         pairs += [("sh:property", _property(n, c, s)) for s in c.properties()]
         body = " ;\n    ".join(f"{p} {o}" for p, o in pairs)
         blocks.append(f"{n.iri(c.name + 'Shape')}\n    {body} .\n")

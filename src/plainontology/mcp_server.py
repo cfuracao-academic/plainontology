@@ -125,14 +125,14 @@ def build_server(path: Path, allow_proposals: bool = False) -> MCPServer:
                 return f"Not added: {exc}"
             if statement.kind == "comment":
                 return "Not added: comments cannot be proposed."
-            concept_name, _, prop_name = concept.partition(".")
+            onto = load(path)
+            concept_name, prop_name = onto.split_target(concept)
             if not re.fullmatch(NAME, concept_name) or (prop_name and not re.fullmatch(NAME, prop_name)):
                 return f"Not added: '{concept}' is not a valid concept name (or Concept.property)."
             detail = " ".join(
                 "".join(" " if ch in "[]" or unicodedata.category(ch)[0] == "C" else ch for ch in reason).split()
             )
             statement.tag, statement.raw = Tag("proposed", detail[:80]), ""
-            onto = load(path)
             target = onto.find(concept_name)
             if prop_name:
                 prop = target.prop(prop_name) if target is not None else None

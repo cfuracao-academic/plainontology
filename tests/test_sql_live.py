@@ -89,7 +89,7 @@ def test_postgres_inheritance_live_matches_dump(tmp_path):
     (tmp_path / "inh.sql").write_text(INHERITANCE, encoding="utf-8")
     live = _lines(extract(f"postgres:env:{var}", tmp_path))
     dump = _lines(extract("postgres:inh.sql", tmp_path))
-    assert "is_a Item [auto]" in dump["Ebook"]
+    assert "is_a Item" in dump["Ebook"]
     # LIKE leaves a note in the dump that a live database cannot know about
     dump["ItemCopy"] = [line for line in dump["ItemCopy"] if "(LIKE)" not in line]
     assert live == dump

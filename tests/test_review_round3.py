@@ -291,3 +291,177 @@ def test_domain_checks_and_not_null_apply_to_the_column(tmp_path):
     assert t.prop("id").child("min").value == "1"
     assert t.prop("code").flags == ("required",) and t.prop("code").child("length") is not None
     assert t.prop("s").target == "enum(S|M,L|XL)"
+
+
+# --- third review: merge, proposals, layout, validate, exports ---------------------------------
+
+import asyncio  # noqa: E402
+
+import yaml  # noqa: E402
+
+from plainontology import api  # noqa: E402
+from plainontology.check import end_anchored, validate_record  # noqa: E402
+from plainontology.export import to_linkml, to_shacl  # noqa: E402
+from plainontology.mcp_server import build_server  # noqa: E402
+from plainontology.rename import rename  # noqa: E402
+from plainontology.textformat import load, loads  # noqa: E402
+
+
+def _lib(tmp_path, sql):
+    (tmp_path / "s.sql").write_text(sql, encoding="utf-8")
+
+
+def test_a_column_the_source_adds_replaces_a_waiting_proposal(tmp_path):
+    _lib(tmp_path, "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT);\n")
+    f = tmp_path / "lib.onto"
+    api.init(f, [f"sqlite:{(tmp_path / 's.sql').as_posix()}"])
+    text = f.read_text(encoding="utf-8").replace(
+        "  has title : text [auto]\n",
+        '  has title : text [auto]\n  has isbn : text unique [proposed: agent]\n    note "13 digits"\n',
+    )
+    f.write_text(text, encoding="utf-8")
+    _lib(tmp_path, "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, isbn VARCHAR(13) NOT NULL UNIQUE);\n")
+    report = api.refresh(f)
+    assert report.has_drift and any(c.kind == "proposal_confirmed" for c in report.changes)
+    after = f.read_text(encoding="utf-8")
+    assert "has isbn : text required unique [auto]" in after and "[proposed" not in after
+    assert '    note "13 digits"' in after  # the proposal's own lines stay
+    onto = load(f)
+    assert validate_record(onto, "Book", {"id": 1, "title": "x"}) == ["isbn: required but missing"]
+
+
+def test_validate_ignores_proposed_parents_and_concepts():
+    onto = loads(
+        "concept Parent\n  has code : text required\n"
+        "concept Child\n  is_a Parent [proposed]\n  has n : integer\n"
+        "concept Draft [proposed]\n  has x : text\n"
+    )
+    assert validate_record(onto, "Child", {"n": 1}) == []
+    assert "still [proposed]" in validate_record(onto, "Draft", {"x": "a"})[0]
+
+
+def test_an_override_next_to_the_extracted_line_takes_effect(tmp_path):
+    _lib(tmp_path, "CREATE TABLE loans (id INTEGER PRIMARY KEY, status TEXT CHECK (status IN ('open','closed')));\n")
+    f = tmp_path / "l.onto"
+    api.init(f, [f"sqlite:{(tmp_path / 's.sql').as_posix()}"])
+    text = f.read_text(encoding="utf-8").replace(
+        "  has status : enum(open|closed) [auto]\n",
+        "  has status : enum(open|closed) [auto]\n  has status : enum(open|closed|lost)\n",
+    )
+    f.write_text(text, encoding="utf-8")
+    report = api.refresh(f)
+    assert any(c.kind == "overridden" for c in report.changes)
+    after = f.read_text(encoding="utf-8")
+    assert "enum(open|closed) [auto]" not in after and "enum(open|closed|lost)" in after
+    assert validate_record(load(f), "Loan", {"id": 1, "status": "lost"}) == []
+    assert not api.refresh(f).has_drift  # once removed, the override is just kept
+
+
+def test_overridden_property_renamed_in_the_source_keeps_notes_once(tmp_path):
+    _lib(tmp_path, "CREATE TABLE people (id INTEGER PRIMARY KEY, email TEXT);\n")
+    f = tmp_path / "p.onto"
+    api.init(f, [f"sqlite:{(tmp_path / 's.sql').as_posix()}"])
+    text = f.read_text(encoding="utf-8").replace(
+        "  has email : text [auto]\n",
+        '  has email : text [auto]\n    note "lower case only"\n  has email : text required\n',
+    )
+    f.write_text(text, encoding="utf-8")
+    _lib(tmp_path, "CREATE TABLE people (id INTEGER PRIMARY KEY, mail TEXT);\n")
+    api.refresh(f)
+    assert f.read_text(encoding="utf-8").count("lower case only") == 1
+
+
+def test_people_text_is_kept_byte_for_byte_through_a_write(tmp_path):
+    text = (
+        "source sqlite:s.sql  \n\n"
+        "concept A  \n"
+        "  has x : text   \n"
+        "  # why x has a French label:\n"
+        '    label "Ex"@fr\n'
+        "      # deep comment\n"
+        "  has y : text\n\n\n"
+    )
+    f = tmp_path / "a.onto"
+    f.write_text(text, encoding="utf-8", newline="")
+    _lib(tmp_path, "CREATE TABLE other (id INTEGER PRIMARY KEY);\n")
+    server = build_server(f, allow_proposals=True)
+    asyncio.run(server.call_tool("propose", {"concept": "A", "line": 'synonym "Aye"'}))
+    after = f.read_bytes().decode("utf-8")
+    assert after == text.replace("  has y : text\n", '  has y : text\n  synonym "Aye" [proposed: agent]\n')
+
+
+def test_sqlite_script_time_limit_covers_many_slow_statements(tmp_path, monkeypatch):
+    from plainontology.extract import sqlite as sq
+
+    monkeypatch.setattr(sq, "SCRIPT_SECONDS", 0.3)
+    slow = "SELECT length(replace(hex(zeroblob(2000000)), '0', '00'));\n" * 400
+    (tmp_path / "slow.sql").write_text("CREATE TABLE a (id integer primary key);\n" + slow, encoding="utf-8")
+    with pytest.raises(ValueError, match="stopped after"):
+        sq.extract_sqlite(tmp_path / "slow.sql")
+
+
+def test_enum_values_with_line_separators_are_quoted():
+    from plainontology.model import enum_values, make_enum
+
+    enum = make_enum(["a b", "c", "d\x85e"])
+    assert " " not in enum and "\x85" not in enum
+    assert enum_values(enum) == ["a b", "c", "d\x85e"]
+
+
+def test_linkml_keeps_every_pattern_and_safe_strings():
+    onto = loads(
+        'concept A\n  label "a\\u0080b\\u2028c"\n  has s : enum(x|y)\n    pattern "^a"\n    pattern "b$"\n'
+        "concept ASEnum\n  has z : text\n"
+    )
+    doc = yaml.safe_load(to_linkml(onto))
+    slot = doc["classes"]["A"]["attributes"]["s"]
+    assert slot["pattern"] == "^a" and slot["all_of"] == [{"pattern": "b$"}]
+    assert doc["classes"]["A"]["title"] == "a\x80b c"
+    assert slot["range"] != "ASEnum" and slot["range"] in doc["enums"]
+
+
+def test_shacl_checks_inherited_properties_and_case_insensitive_patterns():
+    rdflib = pytest.importorskip("rdflib")
+    pyshacl = pytest.importorskip("pyshacl")
+    onto = loads(
+        "prefix : <https://ex.org/>\n"
+        'concept Parent\n  has code : text required\n    pattern "(?i)^ab$"\n'
+        "concept Child\n  is_a Parent\n"
+    )
+    shapes = rdflib.Graph().parse(data=to_shacl(onto), format="turtle")
+    code = "<https://ex.org/Parent/code>"
+    data = (
+        f'@prefix : <https://ex.org/> .\n:c1 a :Child .\n:c2 a :Child ; {code} "AB" .\n:c3 a :Child ; {code} "zz" .\n'
+    )
+    _ok, graph, _text = pyshacl.validate(rdflib.Graph().parse(data=data, format="turtle"), shacl_graph=shapes)
+    sh = rdflib.Namespace("http://www.w3.org/ns/shacl#")
+    focus = {str(o) for o in graph.objects(None, sh.focusNode)}
+    assert "https://ex.org/c1" in focus and "https://ex.org/c3" in focus and "https://ex.org/c2" not in focus
+
+
+def test_dotted_concept_names_can_be_renamed_and_proposed_to(tmp_path):
+    text = "concept sales\n  has id : integer\nconcept sales.Order\n  has total : decimal\n"
+    onto = loads(text)
+    rename(onto, "sales.Order.total", "amount")
+    assert onto.concepts["sales.Order"].prop("amount") is not None
+    rename(onto, "sales.Order", "Purchase")
+    assert "Purchase" in onto.concepts and "sales" in onto.concepts
+    f = tmp_path / "d.onto"
+    f.write_text(text, encoding="utf-8")
+    server = build_server(f, allow_proposals=True)
+    asyncio.run(server.call_tool("propose", {"concept": "sales.Order", "line": 'synonym "Purchase"'}))
+    asyncio.run(server.call_tool("propose", {"concept": "sales.Order.total", "line": "min 0"}))
+    after = load(f).concepts["sales.Order"]
+    assert after.first("synonym") is not None and after.prop("total").child("min") is not None
+
+
+def test_validate_numbers_and_patterns_at_the_edges():
+    onto = loads(
+        "concept A\n  has n : integer\n    max 9007199254740993\n  has d : decimal\n"
+        '  has p : text\n    pattern "^[]$0-9]+$"\n'
+    )
+    assert validate_record(onto, "A", {"n": 9007199254740993, "d": 10**400, "p": "]$9"}) == []
+    assert validate_record(onto, "A", {"n": 9007199254740994}) == [
+        "n: 9007199254740994 is above the maximum 9007199254740993"
+    ]
+    assert end_anchored("^[]$]$") == "^[]$]\\Z"

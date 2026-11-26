@@ -144,12 +144,12 @@ def rename_property(onto: Ontology, concept_name: str, old: str, new: str) -> st
 
 def rename(onto: Ontology, old: str, new: str) -> str:
     """``old`` and ``new`` are concept names, or ``Concept.property`` for a property."""
-    if "." in old and old.split(".", 1)[0] in onto.concepts:
-        concept, prop = old.split(".", 1)
-        if "." in new and not new.startswith(concept + "."):
+    concept, prop = onto.split_target(old)
+    if prop:
+        if "." in new and not new.startswith(concept + ".") and onto.split_target(new)[1]:
             raise ValueError(
                 "a property can only be renamed within its concept (moving it to another is not supported)"
             )
-        new_prop = new.split(".", 1)[1] if new.startswith(concept + ".") else new
+        new_prop = new[len(concept) + 1 :] if new.startswith(concept + ".") else new
         return rename_property(onto, concept, prop, new_prop)
     return rename_concept(onto, old, new)

@@ -103,8 +103,8 @@ def make_enum(values: list) -> str:
     parts = []
     for v in values:
         text = str(v)
-        clean = "".join(ch for ch in text if unicodedata.category(ch) != "Cc")
-        parts.append(clean if _PLAIN_ENUM_VALUE.match(clean) and clean == text else quote(text))
+        plain = _PLAIN_ENUM_VALUE.match(text) and not any(unicodedata.category(ch) in ("Cc", "Zl", "Zp") for ch in text)
+        parts.append(text if plain else quote(text))
     return f"enum({'|'.join(parts)})" if parts else "text"
 
 
@@ -169,6 +169,7 @@ class Statement:
     raw: str = field(default="", compare=False)
     blank_before: int = field(default=0, compare=False)  # blank lines above it in the file
     col0: bool = field(default=False, compare=False)  # a comment written at the start of the line
+    verbatim: bool = field(default=False, compare=False)  # a comment written back exactly as typed
 
     @property
     def is_auto(self) -> bool:
@@ -314,6 +315,9 @@ class Ontology:
     from_file: bool = False  # read from a file (then no default header is added)
     newline: str = "\n"  # the file's line ending, kept on write
     trailing_blank_before: int = 1
+    trailing_blanks: int = 0  # blank lines at the very end of the file
+    final_newline: bool = True
+    proposals_removed: bool = field(default=False, compare=False)  # set by accepted()
     duplicate_prefixes: list[str] = field(default_factory=list)
 
     def add_concept(self, concept: Concept) -> Concept:
@@ -331,7 +335,10 @@ class Ontology:
         a person accepts them (used by the exports)."""
         import copy
 
+        if self.proposals_removed:
+            return self
         out = copy.deepcopy(self)
+        out.proposals_removed = True
         out.concepts = {n: c for n, c in out.concepts.items() if not (c.tag is not None and c.tag.kind == "proposed")}
         for c in out.concepts.values():
             c.statements = [s for s in c.statements if not s.is_proposed]
@@ -345,6 +352,18 @@ class Ontology:
             return self.concepts[name]
         lowered = name.lower()
         return next((c for n, c in self.concepts.items() if n.lower() == lowered), None)
+
+    def split_target(self, text: str) -> tuple[str, str]:
+        """``Concept`` or ``Concept.property`` -> (concept, property). Concept names may
+        contain dots themselves (``sales.Order``): an existing concept of the whole name
+        wins, then the longest existing concept name before a dot."""
+        if self.find(text) is not None or "." not in text:
+            return text, ""
+        cut = len(text)
+        while (cut := text.rfind(".", 0, cut)) > 0:
+            if self.find(text[:cut]) is not None:
+                return text[:cut], text[cut + 1 :]
+        return text, ""
 
     def prefix_iri(self, prefix: str) -> str | None:
         return self.prefixes.get(prefix) or WELL_KNOWN_PREFIXES.get(prefix)

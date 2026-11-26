@@ -111,10 +111,10 @@ runs:
 
     - name: Comment on the pull request
       # Pull requests from forks get a read-only token, so they are skipped; a
-      # failing comment never fails the check. One comment is kept up to date.
+      # failing comment never fails the check. One comment is kept up to date: once
+      # the drift is fixed it says so (no comment is posted when there never was drift).
       if: >-
         inputs.comment == 'true' && github.event_name == 'pull_request' &&
-        steps.drift.outputs.drift == 'true' &&
         github.event.pull_request.head.repo.full_name == github.repository
       continue-on-error: true
       shell: bash
@@ -123,11 +123,19 @@ runs:
         REPORT: ${{ steps.drift.outputs.report }}
         PR: ${{ github.event.pull_request.number }}
         REPO: ${{ github.repository }}
+        DRIFT: ${{ steps.drift.outputs.drift }}
       run: |
         marker="<!-- plainontology-drift -->"
+        existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+        if [ "$DRIFT" != "true" ]; then
+          if [ -n "$existing" ]; then
+            body=$(printf '%s\n### PlainOntology drift\n\nNo drift: the ontology file matches its sources again.\n' "$marker")
+            gh api -X PATCH "repos/$REPO/issues/comments/$existing" -f body="$body" > /dev/null
+          fi
+          exit 0
+        fi
         safe="${REPORT//\~\~\~/\~ \~ \~}"  # the report cannot close the fence below
         body=$(printf '%s\n### PlainOntology drift\n\nThe ontology file no longer matches its sources. Run `plainonto refresh` and commit the result.\n\n~~~~~~diff\n%s\n~~~~~~\n' "$marker" "$safe")
-        existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
         if [ -n "$existing" ]; then
           gh api -X PATCH "repos/$REPO/issues/comments/$existing" -f body="$body" > /dev/null
         else

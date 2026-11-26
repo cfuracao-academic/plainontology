@@ -25,6 +25,21 @@
 - LinkML: mixins for further parents, `unique_keys`, rules, multilingual labels (checked with the LinkML tools in CI)
 - Turtle: language tags, labels on properties, `owl:hasKey`
 
+**Fixes from a third independent review**
+- Nothing extracted is dropped silently any more: join tables (also to a table not in the file, which stays a concept), tools, OpenAPI parameters and bodies, and dbt relations whose names clash get a new name with a warning
+- JSON Schema: a document that is only a `$ref` to one of its definitions (Pydantic's output for recursive models) follows it; a document named like one of its definitions keeps both; `required` covers properties declared inside `allOf`
+- PostgreSQL: `LIKE`, `CREATE TABLE ... AS` and `INHERITS` (as `is_a`) are read, from dumps and live databases; a domain's CHECKs and NOT NULL apply to its columns (`CHECK (VALUE > 0)` becomes `min 1`)
+- Migrations: a CHECK follows a renamed column and goes with a dropped one; constraints declared on a column, and CHECKs under PostgreSQL's and MySQL's default names, can be dropped; MySQL `DROP CHECK`
+- A column the sources add replaces a waiting `[proposed]` line for it; an extracted line beside your override is removed, so the override takes effect
+- A person's notes under an overridden property are no longer copied twice when the source renames it
+- Trailing spaces, indented comments and blank lines at the end of the file are kept on every write
+- `validate` ignores proposed parents, says so for a proposed concept, compares big integers exactly, accepts any size of integer for `decimal`, and reports a pattern it cannot use instead of crashing
+- SHACL: a subclass's shape includes its parents' (`sh:node`), so inherited properties are checked with the shapes file alone; MySQL's case-insensitive patterns use `sh:flags`
+- LinkML: every pattern is exported (`all_of`), control and line-separator characters are escaped, and an enum is never named like a class
+- Enum values holding a line separator are quoted; dotted concept names work in `rename` and `propose`
+- The SQLite `.sql` time limit covers the whole script; a dbt project folder must stay inside `PLAINONTO_SOURCE_ROOT`; an infinite dbt bound is ignored
+- The Action updates its pull request comment once the drift is fixed
+
 **Fixes from a second independent review**
 - `rename` never drops a line of yours: merging into an existing name keeps every line (clashes are kept twice and flagged by `check`), renaming to the same name is refused, and a property can only be renamed within its concept
 - Overriding an extracted line with your own keeps your lines under it; an agent's proposal can no longer replace an existing line

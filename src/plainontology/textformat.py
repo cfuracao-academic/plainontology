@@ -120,6 +120,7 @@ def loads(text: str) -> Ontology:
     prop_indent = 0
     pending: list[str] = []  # column-0 comments (and blank lines between them) not yet placed
     pending_gap = 0  # blank lines before the first pending comment
+    held: list[Statement] = []  # comments at a property's indentation, before its child lines?
     blanks = 0
     for no, raw in enumerate(text.split("\n"), start=1):
         raw = raw.rstrip("\r")
@@ -129,6 +130,7 @@ def loads(text: str) -> Ontology:
         gap, blanks = blanks, 0
         indent = _indent(raw)
         line = raw.strip()
+        typed = raw.lstrip()  # as typed, trailing spaces included
         if indent:
             if current is None:
                 raise ParseError(no, "indented line outside a concept", raw)
@@ -136,8 +138,20 @@ def loads(text: str) -> Ontology:
                 statement = parse_statement(line)
             except ValueError as exc:
                 raise ParseError(no, str(exc), raw) from None
+            statement.raw = typed
+            if statement.kind == "comment":  # a comment keeps its indentation too
+                statement.raw, statement.verbatim = raw, True
             statement.blank_before = gap
             under_prop = last_prop is not None and indent > prop_indent
+            if statement.kind == "comment" and last_prop is not None and not under_prop:
+                held.append(statement)  # placed once the next line shows where it belongs
+                continue
+            if held:
+                if under_prop and last_prop is not None:
+                    last_prop.children.extend(held)
+                else:
+                    current.statements.extend(held)
+                held = []
             target = last_prop.children if under_prop and last_prop is not None else current.statements
             if pending:  # column-0 comments inside a concept stay where they are
                 waiting = pending_gap
@@ -165,18 +179,21 @@ def loads(text: str) -> Ontology:
             elif statement.kind != "comment":
                 last_prop = None
             continue
+        if held and current is not None:
+            current.statements.extend(held)
+            held = []
         if current is None and onto.preamble:
             onto.preamble.extend([("blank", "", "")] * gap)
         if line.startswith("#"):
             if current is None:
                 onto.comments.append(line[1:])
-                onto.preamble.append(("comment", line[1:], line))
+                onto.preamble.append(("comment", line[1:], typed))
             else:
                 if pending:
                     pending.extend([""] * gap)
                 else:
                     pending_gap = gap
-                pending.append(line)
+                pending.append(typed)
             continue
         last_prop = None
         body, tag = _split_tag(line)
@@ -204,7 +221,7 @@ def loads(text: str) -> Ontology:
                         onto.preamble.pop()
             elif pending:
                 pending.extend([""] * gap)
-            current = Concept(name, tag, leading_comments=pending, raw_header=line, blank_before=blank_before)
+            current = Concept(name, tag, leading_comments=pending, raw_header=typed, blank_before=blank_before)
             pending, pending_gap = [], 0
             onto.concepts[name] = current
             continue
@@ -216,24 +233,32 @@ def loads(text: str) -> Ontology:
             if (m[1] or "") in onto.prefixes:
                 onto.duplicate_prefixes.append(m[1] or "")
             onto.prefixes[m[1] or ""] = m[2]
-            onto.preamble.append(("prefix", m[1] or "", line))
+            onto.preamble.append(("prefix", m[1] or "", typed))
             continue
         if m := _SOURCE_RE.match(body):
             onto.sources.append(m[1])
-            onto.preamble.append(("source", m[1], line))
+            onto.preamble.append(("source", m[1], typed))
             continue
         raise ParseError(no, "expected concept, prefix, source or a # comment", raw)
+    if held and current is not None:
+        current.statements.extend(held)
     onto.trailing_comments = pending
     onto.trailing_blank_before = pending_gap
+    onto.final_newline = text.endswith("\n") or not text
+    onto.trailing_blanks = max(blanks - 1, 0) if onto.final_newline else blanks
     while onto.preamble and onto.preamble[-1][0] == "blank":
         onto.preamble.pop()
     return onto
 
 
+def _lead(statement: Statement, indent: str) -> str:
+    return "" if statement.col0 or (statement.verbatim and not statement.is_auto) else indent
+
+
 def dump_statement(statement: Statement, indent: str = "  ") -> list[str]:
-    lines = [""] * statement.blank_before + [f"{'' if statement.col0 else indent}{statement.text()}"]
+    lines = [""] * statement.blank_before + [f"{_lead(statement, indent)}{statement.text()}"]
     for c in statement.children:
-        lines += [""] * c.blank_before + [f"{'' if c.col0 else indent + '  '}{c.text()}"]
+        lines += [""] * c.blank_before + [f"{_lead(c, indent + '  ')}{c.text()}"]
     return lines
 
 
@@ -288,7 +313,7 @@ def dumps(onto: Ontology) -> str:
     if onto.trailing_comments:
         out.extend([""] * onto.trailing_blank_before)
         out.extend(onto.trailing_comments)
-    return "\n".join(out) + "\n"
+    return "\n".join(out) + "\n" * ((1 if onto.final_newline else 0) + onto.trailing_blanks)
 
 
 def load(path: str | Path) -> Ontology:

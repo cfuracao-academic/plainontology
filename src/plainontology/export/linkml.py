@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 
 from ..model import Ontology, Statement, enum_values, length_bounds, unique_columns
 from ..naming import pascal, safe_name
@@ -36,12 +37,21 @@ RANGES = {
 _PLAIN_KEY = re.compile(r"^[A-Za-z_][\w.-]*$")
 
 
+def _dq(text: str) -> str:
+    """A YAML double-quoted string. JSON escapes are valid YAML escapes; control and
+    line-separator characters JSON leaves raw (YAML rejects or breaks on them) become \\uXXXX."""
+    return "".join(
+        f"\\u{ord(ch):04x}" if unicodedata.category(ch) in ("Cc", "Zl", "Zp", "Cs") else ch
+        for ch in json.dumps(text, ensure_ascii=False)
+    )
+
+
 def _scalar(value) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
-    return json.dumps(str(value), ensure_ascii=False)
+    return _dq(str(value))
 
 
 _YAML_WORDS = {"y", "yes", "n", "no", "true", "false", "on", "off", "null", "~"}
@@ -50,13 +60,13 @@ _YAML_WORDS = {"y", "yes", "n", "no", "true", "false", "on", "off", "null", "~"}
 def _key(k: str) -> str:
     """Quote keys YAML would read as booleans, nulls or numbers (Yes, ON, Null, 1.5)."""
     if k.lower() in _YAML_WORDS or re.fullmatch(r"[-+]?(\d[\d_]*)?(\.\d*)?([eE][-+]?\d+)?", k):
-        return json.dumps(k, ensure_ascii=False)
+        return _dq(k)
     return _key_plain(k)
 
 
 def _key_plain(k: str) -> str:
     plain = _PLAIN_KEY.match(k) and k not in ("true", "false", "null", "yes", "no", "on", "off")
-    return k if plain else json.dumps(k, ensure_ascii=False)
+    return k if plain else _dq(k)
 
 
 def _yaml(obj: dict, indent: int = 0) -> list[str]:
@@ -128,6 +138,8 @@ def _rules(attr: dict, prop: Statement) -> None:
     formats = [r for r in prop.children if r.kind == "format"]
     if patterns:
         attr["pattern"] = patterns[0]
+        if patterns[1:]:  # every pattern must match: the others as an all_of expression
+            attr["all_of"] = [{"pattern": p} for p in patterns[1:]]
         notes += [f"length {r.value}" for r in lengths] + [f"format {r.name}" for r in formats]
     else:
         for r in formats:
@@ -195,7 +207,7 @@ def to_linkml(onto: Ontology, name: str = "ontology", base: str | None = None) -
                 if values is not None:
                     enum_name = pascal(f"{c.name} {s.name} enum")
                     base_enum, n = enum_name, 2
-                    while enum_name in enums:
+                    while enum_name in enums or enum_name in onto.concepts:
                         enum_name, n = f"{base_enum}{n}", n + 1
                     enums[enum_name] = {"permissible_values": {v: {} for v in values}}
                     a["range"] = enum_name

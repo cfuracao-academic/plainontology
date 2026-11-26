@@ -9,6 +9,7 @@ read when sqlglot is installed (any of the ``postgres``/``mysql`` extras).
 from __future__ import annotations
 
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -51,15 +52,23 @@ def _connect(path: Path) -> sqlite3.Connection:
     if path.suffix.lower() == ".sql":
         con = sqlite3.connect(":memory:")
         con.set_authorizer(_no_files)
+        if hasattr(con, "setlimit"):  # Python 3.11+: no string or blob over 10 MB
+            con.setlimit(getattr(sqlite3, "SQLITE_LIMIT_LENGTH", 0), 10_000_000)
         deadline = time.monotonic() + SCRIPT_SECONDS
-        # A schema file loads in milliseconds; stop one that runs away (an endless query).
-        con.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 10_000)
+        # A schema file loads in milliseconds; stop one that runs away, whether in one
+        # endless statement (progress handler) or in many slow ones (timer, whole script).
+        con.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1_000)
+        timer = threading.Timer(SCRIPT_SECONDS, con.interrupt)
+        timer.daemon = True
+        timer.start()
         try:
             con.executescript(path.read_text(encoding="utf-8-sig"))
         except sqlite3.DatabaseError as exc:
             con.close()
-            reason = f"stopped after {SCRIPT_SECONDS} seconds" if time.monotonic() > deadline else str(exc)
+            reason = f"stopped after {SCRIPT_SECONDS} seconds" if time.monotonic() >= deadline else str(exc)
             raise ValueError(f"{path.name}: {reason}") from None
+        finally:
+            timer.cancel()
         con.set_progress_handler(None, 0)
         return con
     if not path.exists():

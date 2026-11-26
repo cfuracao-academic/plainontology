@@ -22,7 +22,8 @@ Dumps are read in their own dialect; live databases through SQLAlchemy, read-onl
 | table and column comments | the concept's definition, the property's description |
 | primary and foreign keys, unique constraints | `key`, relations, `unique`, `unique (a, b)` |
 | `CHECK (x IN (...))`, `CHECK (x >= 0)`, `CHECK (x ~ 'regex')`, `varchar(n)` | an enum, `min`, `pattern`, `length ..n`; other checks become notes |
-| enums, domains, arrays, `tinyint(1)` | `enum(...)`, the domain's type and rules, `many`, `boolean` |
+| enums, domains, arrays, `tinyint(1)` | `enum(...)`, the domain's type, its CHECKs and NOT NULL, `many`, `boolean` |
+| `LIKE other`, `CREATE TABLE ... AS SELECT`, `INHERITS (parent)` | the copied columns (and keys and checks with `INCLUDING`); the query's columns; `is_a Parent` |
 | join tables | a `many` relation; a join table with extra columns also stays a concept |
 | triggers | notes |
 | `ALTER TABLE` (add, drop, rename, change and alter columns; drop constraints; rename tables), `DROP TABLE` | applied in order, so migration scripts work as a dump; a constraint that cannot be found is a warning |

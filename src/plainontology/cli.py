@@ -130,9 +130,13 @@ def _cmd_validate(args) -> int:
     raw = sys.stdin.read() if args.record == "-" else Path(args.record).read_text(encoding="utf-8-sig")
     data = json.loads(raw)
     records = data if isinstance(data, list) else [data]
-    onto = load(args.file)
+    whole = load(args.file)
+    onto = whole.accepted()  # proposals do not count until a person accepts them
     if onto.find(args.concept) is None:
-        print(f"plainonto: no concept named {args.concept} in {args.file}", file=sys.stderr)
+        if whole.find(args.concept) is not None:
+            print(f"plainonto: concept {args.concept} is still [proposed]; accept it first", file=sys.stderr)
+        else:
+            print(f"plainonto: no concept named {args.concept} in {args.file}", file=sys.stderr)
         return 2
     failed = 0
     for i, record in enumerate(records):

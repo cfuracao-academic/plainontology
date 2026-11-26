@@ -8,7 +8,8 @@ Rules (see SPEC.md, "Refresh rules"):
    sources no longer produce are removed.
 3. If a person's line has the same key as an extracted line (for example both
    describe the property ``title``), the person's line wins and the extracted
-   one is not written.
+   one is not written. A ``[proposed]`` line is the exception: once the sources
+   produce its key, the extracted line replaces it (the proposal came true).
 4. The same rules apply to the child lines under a property.
 5. A concept or property that disappears from the sources is removed only if it
    was extracted and holds no lines of yours. Otherwise it is kept and reported.
@@ -37,6 +38,8 @@ _SYMBOLS = {
     "concept_renamed": ">",
     "property_renamed": ">",
     "warning": "?",
+    "overridden": "-",
+    "proposal_confirmed": "~",
 }
 
 # Report lines that are not drift: nothing about the sources changed.
@@ -86,6 +89,12 @@ class Change:
             return f"{sym} {self.concept}: {self.line}  (was: {self.previous})"
         if self.kind == "kept_yours":
             return f"{sym} {self.concept}: kept your line {self.line}  (sources say: {self.previous})"
+        if self.kind == "overridden":
+            return f"{sym} {self.concept}: {self.line}  (replaced by your line {self.previous})"
+        if self.kind == "proposal_confirmed":
+            return (
+                f"{sym} {self.concept}: {self.line}  (now in the sources; replaces the proposed line {self.previous})"
+            )
         if self.kind == "warning":
             subject = f"concept {self.concept} is " if self.concept else ""
             return f"{sym} warning: {subject}{self.line}"
@@ -122,6 +131,10 @@ class DriftReport:
         if warned:
             summary += f", {warned} warning(s)"
         return "\n".join([*lines, "", summary + "."])
+
+
+def _is_proposed(statement: Statement) -> bool:
+    return statement.tag is not None and statement.tag.kind == "proposed"
 
 
 def _has_yours(statement: Statement) -> bool:
@@ -164,11 +177,13 @@ def _merge_lines(
     renames: bool = True,
     target_map: dict[str, str] | None = None,
 ) -> list[Statement]:
-    yours = [s for s in old if not s.is_auto]
-    your_keys = {s.key() for s in yours if s.kind != "comment"}
     fresh: dict[tuple, Statement] = {}
     for s in new:
         fresh.setdefault(s.key(), s)
+    # A proposal the sources now produce gives way to the extracted line.
+    confirmed = {s.key() for s in old if _is_proposed(s) and s.key() in fresh}
+    yours = [s for s in old if not s.is_auto and s.key() not in confirmed]
+    your_keys = {s.key() for s in yours if s.kind != "comment"}
     old_keys = {s.key() for s in old}
 
     # Property renames: a vanished extracted property holding your child lines,
@@ -177,7 +192,11 @@ def _merge_lines(
     if renames:
         targets = target_map or {}
         added = [s for k, s in fresh.items() if s.is_property and k not in old_keys and k not in your_keys]
-        gone = [s for s in old if s.is_auto and s.is_property and s.key() not in fresh and _has_yours(s)]
+        gone = [
+            s
+            for s in old
+            if s.is_auto and s.is_property and s.key() not in fresh and s.key() not in your_keys and _has_yours(s)
+        ]
         candidates = [
             (1.0, s.name, a.name)
             for s in gone
@@ -200,6 +219,17 @@ def _merge_lines(
     placed: set[tuple] = set()
     for s in old:
         key = s.key()
+        if key in confirmed and not s.is_auto:
+            if key in placed:
+                continue
+            line = copy.deepcopy(fresh[key])
+            line.blank_before = s.blank_before
+            if s.is_property:
+                line.children = _merge_children(s.children, line.children, f"{where}.{s.name}", report)
+            report.add("proposal_confirmed", where, line.body(), s.body())
+            merged.append(line)
+            placed.add(key)
+            continue
         if not s.is_auto:
             mine = copy.deepcopy(s)
             if s.is_property:
@@ -210,7 +240,12 @@ def _merge_lines(
                 mine.children += copy.deepcopy(orphans.pop(key, []))
             merged.append(mine)
             continue
-        if key in your_keys or key in placed or id(s) in renamed_old:
+        if key in your_keys:
+            # Your line of the same key wins; the extracted line leaves the file.
+            mine = next(m for m in yours if m.key() == key)
+            report.add("overridden", where, s.body(), mine.body())
+            continue
+        if key in placed or id(s) in renamed_old:
             continue
         replacement = fresh.get(key)
         if replacement is None:
@@ -304,6 +339,8 @@ def merge(current: Ontology, fresh: Ontology, renames: bool = True) -> tuple[Ont
         from_file=current.from_file,
         newline=current.newline,
         trailing_blank_before=current.trailing_blank_before,
+        trailing_blanks=current.trailing_blanks,
+        final_newline=current.final_newline,
     )
     for prefix, iri in fresh.prefixes.items():
         out.prefixes.setdefault(prefix, iri)
