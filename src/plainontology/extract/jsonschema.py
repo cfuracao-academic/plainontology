@@ -72,6 +72,7 @@ class SchemaWalker:
         self.label = label
         self.path = path
         self.shared = shared or _Shared()
+        self.kind = "jsonschema"  # the source kind named in tags
         if path is not None:
             self.shared.walkers.setdefault(path, self)
 
@@ -90,7 +91,7 @@ class SchemaWalker:
             if not target.exists():
                 return None
             doc = json.loads(target.read_text(encoding="utf-8"))
-            SchemaWalker(doc, target.name, target, self.shared)
+            SchemaWalker(doc, target.name, target, self.shared).kind = self.kind
         return self.shared.walkers[target]
 
     def locate(self, ref: str) -> tuple[SchemaWalker | None, str]:
@@ -124,7 +125,7 @@ class SchemaWalker:
         name = self.ref_name(ref)
         walker, resolved = self.resolve(ref)
         if name not in self.concepts and walker is not None and resolved is not None and walker.is_object(resolved):
-            walker.object_concept(name, resolved, f"jsonschema {walker.label} #{ref.partition('#')[2]}")
+            walker.object_concept(name, resolved, f"{walker.kind} {walker.label} #{ref.partition('#')[2]}")
 
     # shapes -----------------------------------------------------------
     @staticmethod
@@ -275,7 +276,7 @@ class SchemaWalker:
             resolved.append((o, walker, node))
         if all(node is not None and walker is not None and walker.is_object(node) for _, walker, node in resolved):
             name = pascal(f"{owner} {singular(pname) if many else pname}")
-            union = Concept(name, Tag("auto", f"jsonschema {self.label} {owner}.{pname} (one of)"))
+            union = Concept(name, Tag("auto", f"{self.kind} {self.label} {owner}.{pname} (one of)"))
             self.concepts.setdefault(name, union)
             members = []
             for i, (o, walker, node) in enumerate(resolved):
@@ -285,7 +286,7 @@ class SchemaWalker:
                 else:
                     assert walker is not None and node is not None  # checked above
                     member = pascal(node.get("title") or f"{name} option {i + 1}")
-                    walker.object_concept(member, node, f"jsonschema {self.label} {owner}.{pname} option {i + 1}")
+                    walker.object_concept(member, node, f"{self.kind} {self.label} {owner}.{pname} option {i + 1}")
                 members.append(member)
                 if member in self.concepts:
                     self.concepts[member].add(Statement("is_a", name=name, tag=AUTO))
@@ -312,7 +313,7 @@ class SchemaWalker:
             if ps.get("properties") or ps.get("allOf"):
                 base = ps.get("title") or f"{owner} {singular(pname) if many else pname}"
                 name = pascal(base)
-                self.object_concept(name, ps, f"jsonschema {self.label} {owner}.{pname}")
+                self.object_concept(name, ps, f"{self.kind} {self.label} {owner}.{pname}")
                 return "rel", name, ""
             return "has", "json", ""
         if "enum" in ps:

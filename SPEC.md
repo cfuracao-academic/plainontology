@@ -2,6 +2,14 @@
 
 A PlainOntology file is UTF-8 plain text, one statement per line. Files conventionally end in `.onto`. Version 0.2 adds lines under properties, language tags, `unique (...)` and validation rules; every 0.1 file is a valid 0.2 file.
 
+## Versioning
+
+* The format has its own version, written in the header comment that `plainonto init` creates (`# PlainOntology file, format 0.2`). It changes only when the grammar or the refresh rules change, not with every release of the tool.
+* **Within 0.x, format versions only add.** A new version may add statements, rules, flags or types; it does not remove or change the meaning of existing ones. Every file written for an older format stays valid and means the same.
+* An older PlainOntology that meets newer syntax stops with the line number, rather than guessing.
+* **1.0 freezes the grammar.** After 1.0, changes that would make an existing file invalid or change its meaning need a new major version and a migration command.
+* The Python package follows [semantic versioning](https://semver.org); command-line changes that could break scripts are listed in CHANGELOG.md.
+
 ## File layout
 
 ```text

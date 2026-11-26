@@ -25,6 +25,19 @@
 - LinkML: mixins for further parents, `unique_keys`, rules, multilingual labels (checked with the LinkML tools in CI)
 - Turtle: language tags, labels on properties, `owl:hasKey`
 
+**More sources**
+- `openapi:` (OpenAPI 3.x, Swagger 2.0; JSON or YAML): schemas become concepts, operations become concepts with parameters, body and `returns`
+- `dbt:` (manifest or project folder): models, seeds, snapshots and sources; tests and constraints carry over as flags, enums, relations and rules; lineage and semantic-layer measures as notes
+
+**Tooling**
+- GitHub Action (`uses: cfuracao-academic/plainontology@v0.2.0`): drift as a check, job summary, optional pull request comment
+- pre-commit hooks `plainonto-check` and `plainonto-drift`; `check` and `drift` take several files
+- VS Code extension for `.onto` syntax highlighting (`editors/vscode`)
+- Documentation site (MkDocs) with a tutorial, sources, CI, agents, performance and the file format
+- Benchmark script; 5,000 tables extract in about 7 seconds
+- ruff, mypy and a coverage floor in CI; code of conduct, security policy, issue and pull request templates
+- The file format has a stated versioning policy (SPEC.md)
+
 **Other**
 - Irregular plurals: `people` becomes `Person`
 - New extras: `postgres`, `mysql`, `all`

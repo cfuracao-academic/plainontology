@@ -10,6 +10,12 @@ python -m venv .venv
 pytest
 ```
 
+Before opening a pull request, run the same checks as CI:
+
+```bash
+ruff check src tests && ruff format --check src tests && mypy && pytest --cov --cov-fail-under=85
+```
+
 ## Ground rules
 
 1. **Never overwrite a person's line.** Any change to merge must keep the refresh rules in [SPEC.md](SPEC.md) and the tests in `tests/test_merge.py` passing.

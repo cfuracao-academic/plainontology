@@ -39,22 +39,24 @@ Lines tagged `[auto]` come from the sources and are refreshed. **Every other lin
 
 | | |
 |---|---|
-| **Extract** | PostgreSQL, MySQL and SQLite (live databases or schema dumps), JSON Schema (draft 7 and 2020-12, across files), and LLM tool definitions (Anthropic, OpenAI Chat and Responses, MCP `tools/list`) |
+| **Extract** | PostgreSQL, MySQL and SQLite (live databases, dumps or migration scripts), JSON Schema (draft 7 and 2020-12, across files), OpenAPI 3.x and Swagger 2.0, dbt manifests, and AI agent tool definitions (Anthropic, OpenAI Chat and Responses, MCP `tools/list`) |
 | **Keep your edits** | Refresh replaces `[auto]` lines only. If you rewrite an extracted line, your version wins and is reported |
 | **Follow renames** | A renamed table or column keeps your lines; `plainonto rename` handles the cases it cannot guess, and `--no-renames` turns the guessing off |
-| **Report drift** | `plainonto drift` exits 1 when the sources changed, so it can gate CI; it also warns when two sources define the same concept |
+| **Report drift** | `plainonto drift` exits 1 when the sources changed; a GitHub Action and pre-commit hooks put it in CI. It also warns when two sources define the same concept |
 | **Check** | Duplicate lines, unknown targets, undeclared prefixes, misplaced rules, proposals waiting for review |
 | **Validate** | Check JSON records (for example an agent's structured output) against a concept: types, enums, required fields, min, max, length, pattern, format |
 | **Multilingual** | Labels, definitions and synonyms in any language (`label "Livre"@fr`) |
 | **Export** | RDF Turtle (OWL structure, SKOS meaning), SHACL shapes for validating RDF data, and LinkML YAML |
 | **Serve to agents** | An MCP server so agents look concepts up, validate their output, and propose new lines for a person to review |
 
-The core has no dependencies beyond the Python standard library. Extras: `mcp` for the MCP server, `postgres` and `mysql` for those databases, `all` for everything.
+The core has no dependencies beyond the Python standard library. Extras: `mcp` for the MCP server, `postgres` and `mysql` for those databases, `openapi` for YAML OpenAPI files, `all` for everything.
+
+**Documentation:** [tutorial, sources, CI, agents and the file format](docs/index.md) (also built as a site with `mkdocs serve`).
 
 ## Quick start
 
 ```bash
-pip install "plainontology[all]"     # or just [mcp], [postgres], [mysql]
+pip install "plainontology[all]"     # or just [mcp], [postgres], [mysql], [openapi]
 
 cd examples
 plainonto init library.onto --from sqlite:library.sql --from tools:agent-tools.json
@@ -79,6 +81,8 @@ Sources are written `KIND:LOCATION` and stored in the file; file paths are relat
 | `mysql` | a schema dump (`mysqldump --no-data`), or a live MySQL or MariaDB database: `env:VARIABLE` |
 | `sqlite` | a SQLite database, or a SQLite-compatible `.sql` file (loaded into memory) |
 | `jsonschema` | a JSON Schema file; `$defs` and nested objects become concepts. For Pydantic, dump `Model.model_json_schema()` first |
+| `openapi` | an OpenAPI 3.x or Swagger 2.0 file (JSON, or YAML with the `openapi` extra): schemas become concepts, operations become concepts with their parameters, body and `returns` |
+| `dbt` | a dbt manifest (`target/manifest.json`) or the project folder: models and sources become concepts; `not_null`, `unique`, `accepted_values`, `relationships` and `accepted_range` tests carry over; lineage and semantic-layer measures become notes |
 | `tools` | a JSON list of tool definitions, or an object with a `tools` list |
 
 **Databases.** Dumps are read in their own dialect, and live databases through SQLAlchemy, read-only. Both give the same result (CI checks this against real PostgreSQL 16 and MySQL 8.4 servers):
@@ -102,6 +106,40 @@ plainonto init library.onto --from postgres:env:LIBRARY_DB
 ```
 
 A URL with a password is refused, because the source line is saved in the ontology file.
+
+## Use it in CI and git hooks
+
+```yaml
+# .github/workflows/ontology.yml
+on: [pull_request]
+permissions: { contents: read, pull-requests: write }
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cfuracao-academic/plainontology@v0.2.0
+        with:
+          file: ontology/library.onto
+          install: plainontology[postgres]
+          comment: "true"          # post the drift report on the pull request
+```
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/cfuracao-academic/plainontology
+    rev: v0.2.0
+    hooks:
+      - id: plainonto-check
+      - id: plainonto-drift
+```
+
+All inputs are in [docs/ci.md](docs/ci.md). Editors: a [VS Code extension](editors/vscode) highlights `.onto` files.
+
+## Performance
+
+1,000 tables (13,500 lines) extract or refresh in about 1.5 seconds; 5,000 tables in about 7; `check` and the exports take under a second. Time grows linearly. Details and the script in [docs/performance.md](docs/performance.md).
 
 ## Use it from an AI agent (MCP)
 

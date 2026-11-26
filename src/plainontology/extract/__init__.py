@@ -9,6 +9,8 @@ postgres    a PostgreSQL schema file (pg_dump --schema-only), or a live
             a password
 mysql       the same for MySQL and MariaDB (mysqldump --no-data)
 jsonschema  a JSON Schema file
+openapi     an OpenAPI 3.x or Swagger 2.0 file (JSON or YAML)
+dbt         a dbt manifest (target/manifest.json), or the dbt project folder
 tools       a JSON file of LLM tool definitions
 ==========  ===========================================================
 
@@ -21,7 +23,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..model import Concept, Ontology
+from .dbt import extract_dbt
 from .jsonschema import extract_jsonschema
+from .openapi import extract_openapi
 from .sqlite import extract_sqlite
 from .sqllive import is_live
 from .sqlmodel import tables_to_concepts
@@ -59,6 +63,8 @@ EXTRACTORS: dict[str, Callable[[str, Path], list[Concept]]] = {
     "postgres": _sql("postgres"),
     "mysql": _sql("mysql"),
     "jsonschema": _file(extract_jsonschema),
+    "openapi": _file(extract_openapi),
+    "dbt": _file(extract_dbt),
     "tools": _file(extract_tools),
 }
 

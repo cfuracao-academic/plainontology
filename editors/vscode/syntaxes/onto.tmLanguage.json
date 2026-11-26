@@ -1,0 +1,90 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "PlainOntology",
+  "scopeName": "source.onto",
+  "fileTypes": ["onto"],
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#tag" },
+    { "include": "#header" },
+    { "include": "#concept" },
+    { "include": "#property" },
+    { "include": "#relation" },
+    { "include": "#statement" },
+    { "include": "#rule" },
+    { "include": "#string" }
+  ],
+  "repository": {
+    "comment": {
+      "match": "^\\s*(#.*)$",
+      "captures": { "1": { "name": "comment.line.number-sign.onto" } }
+    },
+    "tag": {
+      "match": "\\[(auto|proposed)(?::[^\\]]*)?\\]\\s*$",
+      "name": "comment.block.documentation.onto",
+      "captures": { "1": { "name": "keyword.other.tag.onto" } }
+    },
+    "header": {
+      "match": "^(prefix)\\s+([A-Za-z_][\\w-]*)?(:)\\s*(<[^>]*>)|^(source)\\s+(\\S+)",
+      "captures": {
+        "1": { "name": "keyword.control.import.onto" },
+        "2": { "name": "entity.name.namespace.onto" },
+        "3": { "name": "punctuation.separator.onto" },
+        "4": { "name": "markup.underline.link.onto" },
+        "5": { "name": "keyword.control.import.onto" },
+        "6": { "name": "string.unquoted.source.onto" }
+      }
+    },
+    "concept": {
+      "match": "^(concept)\\s+([A-Za-z_][\\w.:/-]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.concept.onto" },
+        "2": { "name": "entity.name.type.class.onto" }
+      }
+    },
+    "property": {
+      "match": "^\\s+(has)\\s+([A-Za-z_][\\w.:/-]*)\\s*(:)\\s*(enum\\([^)]*\\)|text|integer|decimal|boolean|date|datetime|binary|json|any|[A-Za-z_]\\w*)((?:\\s+(?:key|required|unique|many))*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.property.onto" },
+        "2": { "name": "variable.other.property.onto" },
+        "3": { "name": "punctuation.separator.onto" },
+        "4": { "name": "support.type.onto" },
+        "5": { "name": "storage.modifier.flag.onto" }
+      }
+    },
+    "relation": {
+      "match": "^\\s+([A-Za-z_][\\w.:/-]*)\\s*(->)\\s*([A-Za-z_][\\w.:/-]*)((?:\\s+(?:key|required|unique|many))*)",
+      "captures": {
+        "1": { "name": "variable.other.property.onto" },
+        "2": { "name": "keyword.operator.arrow.onto" },
+        "3": { "name": "entity.name.type.class.onto" },
+        "4": { "name": "storage.modifier.flag.onto" }
+      }
+    },
+    "statement": {
+      "match": "^\\s+(is_a|same_as|unique|label|definition|synonym|note)\\b(?:\\s+([A-Za-z_][\\w.:/-]*))?",
+      "captures": {
+        "1": { "name": "keyword.other.statement.onto" },
+        "2": { "name": "entity.name.type.class.onto" }
+      }
+    },
+    "rule": {
+      "match": "^\\s+(min|max|length|pattern|format)\\b\\s*(-?\\d+(?:\\.\\d+)?|\\d*\\.\\.\\d*|[A-Za-z][\\w-]*)?",
+      "captures": {
+        "1": { "name": "keyword.other.rule.onto" },
+        "2": { "name": "constant.numeric.onto" }
+      }
+    },
+    "string": {
+      "begin": "\"",
+      "end": "\"(@[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*)?",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.onto" } },
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.onto" },
+        "1": { "name": "constant.language.language-tag.onto" }
+      },
+      "name": "string.quoted.double.onto",
+      "patterns": [{ "match": "\\\\[\"\\\\n]", "name": "constant.character.escape.onto" }]
+    }
+  }
+}
