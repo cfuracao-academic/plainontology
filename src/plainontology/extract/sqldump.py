@@ -1,10 +1,19 @@
-"""Read PostgreSQL and MySQL schema files in their own dialect.
+"""Read PostgreSQL, MySQL (and SQLite) schema files in their own dialect.
 
 Works on ``pg_dump --schema-only`` and ``mysqldump --no-data`` output as well
-as hand-written DDL: CREATE TABLE, ALTER TABLE ... ADD CONSTRAINT, CREATE
-UNIQUE INDEX, PostgreSQL ``CREATE TYPE ... AS ENUM`` and arrays, MySQL
-``enum(...)`` and ``tinyint(1)``. Statements that are not about the schema
-(SET, SELECT, LOCK TABLES, functions) are skipped. Needs ``sqlglot``.
+as hand-written DDL:
+
+* CREATE TABLE and ALTER TABLE ... ADD CONSTRAINT (keys, foreign keys,
+  unique, CHECK), CREATE UNIQUE INDEX
+* COMMENT ON TABLE / VIEW / COLUMN (PostgreSQL), column ``COMMENT '...'`` and
+  table ``COMMENT='...'`` (MySQL)
+* CREATE VIEW, with column types and lengths taken from the tables it selects from
+* CREATE TYPE ... AS ENUM, composite types, CREATE DOMAIN, arrays (PostgreSQL);
+  ``enum(...)`` and ``tinyint(1)`` (MySQL)
+* CREATE TRIGGER, including MySQL's versioned-comment form
+* schemas: tables outside ``public`` keep their schema (``archive.orders``)
+
+Everything else in a dump (SET, data, functions) is skipped. Needs ``sqlglot``.
 """
 
 from __future__ import annotations
@@ -13,19 +22,31 @@ import logging
 import re
 from pathlib import Path
 
-from .sqlmodel import Column, ForeignKey, Table, enum_type, map_type
+from .sqlmodel import Column, ForeignKey, Table, declared_length, enum_type, map_type, qualified
 
 try:
     import sqlglot
     from sqlglot import exp
-    from sqlglot.errors import ErrorLevel, ParseError
+    from sqlglot.errors import ParseError
 except ImportError:  # pragma: no cover - reported when used
     sqlglot = None
 
 logging.getLogger("sqlglot").setLevel(logging.ERROR)
 
+DEFAULT_SCHEMAS = {"postgres": ("public",), "mysql": (), "sqlite": ("main",)}
+
 _COPY_BLOCK = re.compile(r"^COPY [^\n]*FROM stdin;\n.*?^\\\.\n?", re.M | re.S)
 _INSERTS = re.compile(r"^INSERT INTO [^\n]*;\n", re.M)
+_VERSIONED = re.compile(r"/\*!\d*\s*(.*?)\*/", re.S)
+_DELIMITER = re.compile(r"^DELIMITER\s+\S+\s*$", re.M | re.I)
+_IDENT = r'[`"]?([\w$]+)[`"]?'
+_DOMAIN = re.compile(rf"CREATE\s+DOMAIN\s+(?:{_IDENT}\.)?{_IDENT}\s+(?:AS\s+)?([A-Za-z][\w ]*?(?:\([^)]*\))?)\s*(?:DEFAULT|NOT|NULL|CHECK|CONSTRAINT|COLLATE|;)(.*?);",
+                     re.I | re.S)
+_DOMAIN_IN = re.compile(r"VALUE\s+IN\s*\(([^)]*)\)", re.I)
+_DOMAIN_REGEX = re.compile(r"VALUE\)?(?:::\w+)?\s*~\s*'((?:[^']|'')*)'", re.I)
+_TRIGGER = re.compile(
+    rf"CREATE\s+(?:OR\s+REPLACE\s+)?(?:DEFINER\s*=\s*\S+\s+)?(?:CONSTRAINT\s+)?TRIGGER\s+{_IDENT}\s+"
+    rf"(BEFORE|AFTER|INSTEAD\s+OF)\s+(.+?)\s+ON\s+(?:ONLY\s+)?(?:{_IDENT}\.)?{_IDENT}", re.I | re.S)
 
 _INTEGER = {"INT", "BIGINT", "SMALLINT", "MEDIUMINT", "TINYINT", "SERIAL", "BIGSERIAL", "SMALLSERIAL", "UINT",
             "UBIGINT", "USMALLINT", "UMEDIUMINT", "UTINYINT", "INT128", "INT256", "UINT128", "UINT256", "YEAR"}
@@ -34,18 +55,12 @@ _DECIMAL = {"DECIMAL", "DOUBLE", "FLOAT", "MONEY", "SMALLMONEY", "UDECIMAL", "BI
 _DATETIME = {"DATETIME", "DATETIME2", "DATETIME64", "TIMESTAMP", "TIMESTAMPTZ", "TIMESTAMPLTZ", "TIMESTAMPNTZ",
              "TIMESTAMP_S", "TIMESTAMP_MS", "TIMESTAMP_NS", "SMALLDATETIME", "DATETIMEOFFSET"}
 _BINARY = {"BINARY", "VARBINARY", "BLOB", "TINYBLOB", "MEDIUMBLOB", "LONGBLOB", "BYTEA", "IMAGE"}
+_SIZED_TEXT = {"VARCHAR", "CHAR", "NVARCHAR", "NCHAR"}
 
 
 def _require() -> None:
     if sqlglot is None:
         raise ValueError("reading PostgreSQL or MySQL schema files needs sqlglot: pip install 'plainontology[postgres]'")
-
-
-def _name(node) -> str:
-    """Table name without schema prefix (``public.books`` becomes ``books``)."""
-    if isinstance(node, exp.Schema):
-        node = node.this
-    return node.name if node is not None else ""
 
 
 def _columns(node) -> list[str]:
@@ -55,50 +70,76 @@ def _columns(node) -> list[str]:
     return [i.name for i in items if i.name]
 
 
+def _strip_quotes(text: str) -> list[str]:
+    return [v.strip().strip("'\"") for v in text.split(",") if v.strip()]
+
+
 class _Reader:
     def __init__(self, dialect: str):
         self.dialect = dialect
+        self.defaults = DEFAULT_SCHEMAS.get(dialect, ())
         self.enums: dict[str, list[str]] = {}
+        self.domains: dict[str, tuple[str, list[str] | None, str]] = {}
+        self.composites: set[str] = set()
         self.tables: dict[str, Table] = {}
-        self.skipped = 0
+        self.views: list[tuple[str, object]] = []
+        self.table_comments: dict[str, str] = {}
+        self.column_comments: dict[tuple[str, str], str] = {}
 
-    # types -------------------------------------------------------------
-    def datatype(self, kind) -> tuple[str, bool]:
-        if kind is None:
-            return "any", False
-        dtype = kind.this.name if hasattr(kind.this, "name") else str(kind.this)
-        if dtype == "ARRAY":
-            inner = kind.expressions[0] if kind.expressions else None
-            return self.datatype(inner)[0], True
-        if dtype == "ENUM":
-            return enum_type([e.name for e in kind.expressions]), False
-        if dtype == "USERDEFINED":
-            key = kind.sql(self.dialect).split(".")[-1].strip('"`').lower()
-            if key in self.enums:
-                return enum_type(self.enums[key]), False
-            return "any", False
-        if dtype == "TINYINT" and self.dialect == "mysql" and [e.sql() for e in kind.expressions] == ["1"]:
-            return "boolean", False
-        if dtype in ("BOOLEAN", "BIT"):
-            return "boolean", False
-        if dtype in _INTEGER:
-            return "integer", False
-        if dtype in _DECIMAL:
-            return "decimal", False
-        if dtype == "DATE" or dtype == "DATE32":
-            return "date", False
-        if dtype in _DATETIME:
-            return "datetime", False
-        if dtype in ("JSON", "JSONB"):
-            return "json", False
-        if dtype in _BINARY:
-            return "binary", False
-        return map_type(kind.sql(self.dialect)), False
+    # names -------------------------------------------------------------
+    def qual(self, node) -> str:
+        if isinstance(node, exp.Schema):
+            node = node.this
+        if node is None:
+            return ""
+        schema = node.args.get("db")
+        schema_name = schema.name if schema is not None and self.dialect != "mysql" else None
+        return qualified(schema_name, node.name, self.defaults)
 
-    # statements --------------------------------------------------------
     def table(self, name: str) -> Table:
         return self.tables.setdefault(name, Table(name))
 
+    # types -------------------------------------------------------------
+    def datatype(self, kind) -> tuple[str, bool, int | None]:
+        if kind is None:
+            return "any", False, None
+        dtype = kind.this.name if hasattr(kind.this, "name") else str(kind.this)
+        if dtype == "ARRAY":
+            inner = kind.expressions[0] if kind.expressions else None
+            return self.datatype(inner)[0], True, None
+        if dtype == "ENUM":
+            return enum_type([e.name for e in kind.expressions]), False, None
+        if dtype == "USERDEFINED":
+            key = kind.sql(self.dialect).split(".")[-1].strip('"`').lower()
+            if key in self.enums:
+                return enum_type(self.enums[key]), False, None
+            if key in self.domains:
+                base, values, _pattern = self.domains[key]
+                return (enum_type(values) if values else map_type(base)), False, declared_length(base)
+            if key in self.composites:
+                return "json", False, None
+            return "any", False, None
+        params = [e.sql() for e in kind.expressions]
+        if dtype == "TINYINT" and self.dialect == "mysql" and params == ["1"]:
+            return "boolean", False, None
+        if dtype in ("BOOLEAN", "BIT"):
+            return "boolean", False, None
+        if dtype in _INTEGER:
+            return "integer", False, None
+        if dtype in _DECIMAL:
+            return "decimal", False, None
+        if dtype in ("DATE", "DATE32"):
+            return "date", False, None
+        if dtype in _DATETIME:
+            return "datetime", False, None
+        if dtype in ("JSON", "JSONB"):
+            return "json", False, None
+        if dtype in _BINARY:
+            return "binary", False, None
+        length = int(params[0]) if dtype in _SIZED_TEXT and params and params[0].isdigit() else None
+        return map_type(kind.sql(self.dialect)), False, length
+
+    # statements --------------------------------------------------------
     def constraint(self, t: Table, node) -> None:
         if isinstance(node, exp.Constraint):
             for inner in node.expressions:
@@ -109,20 +150,30 @@ class _Reader:
             ref = node.args.get("reference")
             target = ref.this if ref is not None else None
             if target is not None:
-                t.foreign_keys.append(ForeignKey(_columns(node), _name(target)))
+                t.foreign_keys.append(ForeignKey(_columns(node), self.qual(target)))
         elif isinstance(node, exp.UniqueColumnConstraint):
             cols = _columns(node.this)
             if len(cols) == 1:
                 t.unique.add(cols[0])
+            elif cols:
+                t.unique_sets.append(cols)
+        elif isinstance(node, exp.CheckColumnConstraint) and node.this is not None:
+            t.checks.append(node.this.sql(self.dialect))
 
-    def create_table(self, schema) -> None:
-        t = self.table(_name(schema))
+    def create_table(self, node) -> None:
+        schema = node.this
+        t = self.table(self.qual(schema))
         for item in schema.expressions:
             if not isinstance(item, exp.ColumnDef):
                 self.constraint(t, item)
                 continue
-            datatype, many = self.datatype(item.args.get("kind"))
-            col = Column(item.name, datatype, many=many)
+            kind_node = item.args.get("kind")
+            datatype, many, length = self.datatype(kind_node)
+            col = Column(item.name, datatype, many=many, max_length=length)
+            if kind_node is not None and getattr(kind_node.this, "name", "") == "USERDEFINED":
+                domain = self.domains.get(kind_node.sql(self.dialect).split(".")[-1].strip('"`').lower())
+                if domain:
+                    col.pattern = domain[2]
             for c in item.args.get("constraints") or []:
                 kind = c.args.get("kind")
                 if isinstance(kind, exp.NotNullColumnConstraint) and not kind.args.get("allow_null"):
@@ -132,36 +183,132 @@ class _Reader:
                 elif isinstance(kind, exp.UniqueColumnConstraint):
                     t.unique.add(item.name)
                 elif isinstance(kind, exp.Reference) and kind.this is not None:
-                    t.foreign_keys.append(ForeignKey([item.name], _name(kind.this)))
+                    t.foreign_keys.append(ForeignKey([item.name], self.qual(kind.this)))
+                elif isinstance(kind, exp.CommentColumnConstraint) and kind.this is not None:
+                    col.comment = kind.this.name
+                elif isinstance(kind, exp.CheckColumnConstraint) and kind.this is not None:
+                    t.checks.append(kind.this.sql(self.dialect))
             t.columns.append(col)
+        properties = node.args.get("properties")
+        for prop in (properties.expressions if properties else []):
+            if isinstance(prop, exp.SchemaCommentProperty) and prop.this is not None:
+                t.comment = prop.this.name
 
     def statement(self, node) -> None:
         if isinstance(node, exp.Create):
             kind = (node.args.get("kind") or "").upper()
             if kind == "TABLE" and isinstance(node.this, exp.Schema):
-                self.create_table(node.this)
+                self.create_table(node)
             elif kind == "TYPE":
                 expression = node.args.get("expression")
+                name = self.qual(node.this).split(".")[-1].lower()
                 if isinstance(expression, exp.DataType) and expression.this.name == "ENUM":
-                    self.enums[_name(node.this).lower()] = [e.name for e in expression.expressions]
+                    self.enums[name] = [e.name for e in expression.expressions]
+                elif isinstance(expression, exp.Schema):
+                    self.composites.add(name)
+            elif kind == "VIEW" and node.args.get("expression") is not None:
+                self.views.append((self.qual(node.this), node.args["expression"]))
             elif kind == "INDEX" and node.args.get("unique") and isinstance(node.this, exp.Index):
                 index = node.this
                 params = index.args.get("params")
                 cols = [c.this.name for c in (params.args.get("columns") if params else None) or [] if hasattr(c, "this")]
                 table = index.args.get("table")
-                if table is not None and len(cols) == 1:
-                    self.table(_name(table)).unique.add(cols[0])
+                if table is not None and cols:
+                    t = self.table(self.qual(table))
+                    if len(cols) == 1:
+                        t.unique.add(cols[0])
+                    else:
+                        t.unique_sets.append(cols)
         elif isinstance(node, getattr(exp, "Alter", getattr(exp, "AlterTable", ()))):
-            t = self.table(_name(node.this))
+            t = self.table(self.qual(node.this))
             for action in node.args.get("actions") or []:
                 if isinstance(action, getattr(exp, "AddConstraint", ())):
                     for item in action.expressions:
                         self.constraint(t, item)
                 else:
                     self.constraint(t, action)
+        elif isinstance(node, exp.Comment) and node.args.get("expression") is not None:
+            kind = (node.args.get("kind") or "").upper()
+            text = node.args["expression"].name
+            target = node.this
+            if kind in ("TABLE", "VIEW", "MATERIALIZED VIEW"):
+                self.table_comments[self.qual(target)] = text
+            elif kind == "COLUMN" and isinstance(target, exp.Column):
+                schema = target.args.get("db")
+                table = qualified(schema.name if schema is not None else None, target.table, self.defaults)
+                self.column_comments[(table, target.name)] = text
+
+    # views -------------------------------------------------------------
+    def resolve_view(self, name: str, query) -> Table:
+        view = Table(name, kind="view")
+        select = query
+        while isinstance(select, getattr(exp, "SetOperation", exp.Union)):
+            select = select.this
+        if not isinstance(select, exp.Select):
+            return view
+        aliases: dict[str, str] = {}
+        for tbl in select.find_all(exp.Table):
+            aliases[tbl.alias_or_name] = self.qual(tbl)
+        sources = list(dict.fromkeys(aliases.values()))
+
+        def source_column(table_ref: str, column: str) -> Column | None:
+            table_name = aliases.get(table_ref) if table_ref else (sources[0] if len(sources) == 1 else None)
+            src = self.tables.get(table_name) if table_name else None
+            return src.column(column) if src else None
+
+        for proj in select.expressions:
+            if isinstance(proj, exp.Star) or (isinstance(proj, exp.Column) and isinstance(proj.this, exp.Star)):
+                refs = [aliases.get(proj.table)] if isinstance(proj, exp.Column) and proj.table else sources
+                for ref in refs:
+                    for col in (self.tables[ref].columns if ref in self.tables else []):
+                        view.columns.append(Column(col.name, col.datatype, many=col.many, max_length=col.max_length))
+                continue
+            inner = proj.this if isinstance(proj, exp.Alias) else proj
+            while isinstance(inner, (exp.Paren, exp.Cast)):
+                inner = inner.this
+            src = source_column(inner.table, inner.name) if isinstance(inner, exp.Column) else None
+            name_ = proj.alias_or_name or "column"
+            if src is not None:
+                view.columns.append(Column(name_, src.datatype, many=src.many, max_length=src.max_length))
+            else:
+                view.columns.append(Column(name_, "any"))
+        return view
+
+    # file --------------------------------------------------------------
+    def prescan(self, sql: str) -> None:
+        for m in _DOMAIN.finditer(sql):
+            values = _DOMAIN_IN.search(m[4] or "")
+            regex = _DOMAIN_REGEX.search(m[4] or "")
+            self.domains[m[2].lower()] = (m[3].strip(), _strip_quotes(values[1]) if values else None,
+                                          regex[1].replace("''", "'") if regex else "")
+
+    def triggers(self, sql: str) -> None:
+        seen = set()
+        for m in _TRIGGER.finditer(sql):
+            name, timing, events, schema, table = m[1], m[2], m[3], m[4], m[5]
+            table_name = qualified(schema if self.dialect != "mysql" else None, table, self.defaults)
+            if (table_name, name) in seen or table_name not in self.tables:
+                continue
+            seen.add((table_name, name))
+            event_list = [e.strip().split()[0].upper() for e in re.split(r"\s+OR\s+", events, flags=re.I) if e.strip()]
+            self.tables[table_name].triggers.append(f"{name}: {' '.join(timing.upper().split())} {', '.join(event_list)}")
+
+    def apply_comments(self) -> None:
+        for name, text in self.table_comments.items():
+            if name in self.tables:
+                self.tables[name].comment = text
+        for (name, column), text in self.column_comments.items():
+            col = self.tables[name].column(column) if name in self.tables else None
+            if col is not None:
+                col.comment = text
 
     def read(self, sql: str) -> None:
         sql = _INSERTS.sub("", _COPY_BLOCK.sub("", sql))
+        if self.dialect == "mysql":
+            # mysqldump hides views and triggers in /*!NNNNN ... */ comments.
+            sql = _VERSIONED.sub(lambda m: " " + m[1] + " ", sql)
+            sql = _DELIMITER.sub("", sql).replace(";;", ";")
+        self.prescan(sql)
         try:
             statements = sqlglot.parse(sql, read=self.dialect)
         except ParseError:
@@ -170,21 +317,25 @@ class _Reader:
                 if not chunk.strip():
                     continue
                 try:
-                    statements += sqlglot.parse(chunk, read=self.dialect, error_level=ErrorLevel.RAISE)
+                    statements += sqlglot.parse(chunk, read=self.dialect)
                 except ParseError:
-                    self.skipped += 1
-        enum_first = sorted((s for s in statements if s is not None), key=lambda s: not (
+                    pass
+        types_first = sorted((s for s in statements if s is not None), key=lambda s: not (
             isinstance(s, exp.Create) and (s.args.get("kind") or "").upper() == "TYPE"))
-        for node in enum_first:
+        for node in types_first:
             self.statement(node)
+        for name, query in self.views:
+            self.tables[name] = self.resolve_view(name, query)
+        self.apply_comments()
+        self.triggers(sql)
 
 
 def tables_from_ddl(sql: str, dialect: str) -> list[Table]:
-    """Parse DDL in ``dialect`` ("postgres" or "mysql") into tables, in file order."""
+    """Parse DDL in ``dialect`` ("postgres", "mysql" or "sqlite") into tables, in file order."""
     _require()
     reader = _Reader(dialect)
     reader.read(sql)
-    return [t for t in reader.tables.values() if t.columns]
+    return [t for t in reader.tables.values() if t.columns or t.kind == "view"]
 
 
 def tables_from_file(path: Path, dialect: str) -> list[Table]:

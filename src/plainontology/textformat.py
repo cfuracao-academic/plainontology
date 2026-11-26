@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .model import FLAGS, Concept, Ontology, Statement, Tag
+from .model import CHILD_KINDS, FLAGS, RULE_KINDS, Concept, Ontology, Statement, Tag
 
-FORMAT_VERSION = "0.1"
+FORMAT_VERSION = "0.2"
 
 DEFAULT_HEADER = [
     f" PlainOntology file, format {FORMAT_VERSION}",
@@ -17,15 +17,22 @@ DEFAULT_HEADER = [
 
 _NAME = r"[A-Za-z_][\w.:/-]*"
 _QSTR = r'"((?:[^"\\]|\\.)*)"'
+_LANG = r"(?:@([A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*))?"
 _TYPE = r"(enum\([^)]*\)|[A-Za-z_]\w*)"
 _FLAGS = r"((?:\s+(?:" + "|".join(FLAGS) + r"))*)"
+_NUMBER = r"(-?\d+(?:\.\d+)?)"
 
 _TAG_RE = re.compile(r"\s+\[(auto|proposed)(?::\s*([^\]]*?))?\s*\]\s*$")
 _HAS_RE = re.compile(rf"^has\s+({_NAME})\s*:\s*{_TYPE}{_FLAGS}(?:\s+{_QSTR})?$")
 _REL_RE = re.compile(rf"^({_NAME})\s*->\s*({_NAME}){_FLAGS}(?:\s+{_QSTR})?$")
 _ISA_RE = re.compile(rf"^is_a\s+({_NAME})$")
 _SAMEAS_RE = re.compile(r"^same_as\s+(\S+)$")
-_TEXT_RE = re.compile(rf"^(label|definition|synonym|note)\s+{_QSTR}$")
+_TEXT_RE = re.compile(rf"^(label|definition|synonym|note)\s+{_QSTR}{_LANG}$")
+_UNIQUE_RE = re.compile(rf"^unique\s*\(\s*({_NAME}(?:\s*,\s*{_NAME})*)\s*\)$")
+_MINMAX_RE = re.compile(rf"^(min|max)\s+{_NUMBER}$")
+_LENGTH_RE = re.compile(r"^length\s+(\d*)\s*\.\.\s*(\d*)$")
+_PATTERN_RE = re.compile(rf"^pattern\s+{_QSTR}$")
+_FORMAT_RE = re.compile(r"^format\s+([A-Za-z][\w-]*)$")
 _CONCEPT_RE = re.compile(rf"^concept\s+({_NAME})$")
 _PREFIX_RE = re.compile(r"^prefix\s+([A-Za-z_][\w-]*)?:\s*<([^>]*)>$")
 _SOURCE_RE = re.compile(r"^source\s+(\S.*?)$")
@@ -74,34 +81,72 @@ def parse_statement(line: str) -> Statement:
     if m := _ISA_RE.match(body):
         return Statement("is_a", name=m[1], tag=tag)
     if m := _TEXT_RE.match(body):
-        return Statement(m[1], value=_unquote(m[2]), tag=tag)
+        return Statement(m[1], value=_unquote(m[2]), lang=m[3] or "", tag=tag)
     if m := _SAMEAS_RE.match(body):
         return Statement("same_as", name=m[1], tag=tag)
+    if m := _UNIQUE_RE.match(body):
+        cols = [c.strip() for c in m[1].split(",")]
+        return Statement("unique", name=", ".join(cols), tag=tag)
+    if m := _MINMAX_RE.match(body):
+        return Statement(m[1], value=m[2], tag=tag)
+    if m := _LENGTH_RE.match(body):
+        if not (m[1] or m[2]):
+            raise ValueError("length needs at least one bound, for example length 1..200 or length ..13")
+        return Statement("length", value=f"{m[1]}..{m[2]}", tag=tag)
+    if m := _PATTERN_RE.match(body):
+        pattern = _unquote(m[1])
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ValueError(f"pattern is not a valid regular expression: {exc}") from None
+        return Statement("pattern", value=pattern, tag=tag)
+    if m := _FORMAT_RE.match(body):
+        return Statement("format", name=m[1], tag=tag)
     if m := _REL_RE.match(body):
         return Statement("rel", name=m[1], target=m[2], flags=_flags(m[3]), value=_unquote(m[4] or ""), tag=tag)
     raise ValueError(
-        "not a statement; expected one of: has NAME : TYPE, NAME -> CONCEPT, is_a, "
-        "label, definition, synonym, same_as, note"
+        "not a statement; expected has NAME : TYPE, NAME -> CONCEPT, is_a, unique (...), "
+        "label, definition, synonym, same_as, note, or under a property: min, max, length, pattern, format"
     )
+
+
+def _indent(raw: str) -> int:
+    expanded = raw.expandtabs(4)
+    return len(expanded) - len(expanded.lstrip())
 
 
 def loads(text: str) -> Ontology:
     onto = Ontology()
     current: Concept | None = None
+    last_prop: Statement | None = None
+    prop_indent = 0
     pending_comments: list[str] = []
     for no, raw in enumerate(text.splitlines(), start=1):
         if not raw.strip():
             continue
-        indented = raw[:1] in (" ", "\t")
+        indent = _indent(raw)
         line = raw.strip()
-        if indented:
+        if indent:
             if current is None:
                 raise ParseError(no, "indented line outside a concept", raw)
             try:
-                current.statements.append(parse_statement(line))
+                statement = parse_statement(line)
             except ValueError as exc:
                 raise ParseError(no, str(exc), raw) from None
+            if last_prop is not None and indent > prop_indent:
+                if statement.kind not in CHILD_KINDS:
+                    raise ParseError(no, f"'{statement.kind}' cannot sit under a property; indent it like the property line", raw)
+                last_prop.children.append(statement)
+                continue
+            if statement.kind in RULE_KINDS:
+                raise ParseError(no, f"'{statement.kind}' belongs under a property line; indent it below one", raw)
+            current.statements.append(statement)
+            if statement.is_property:
+                last_prop, prop_indent = statement, indent
+            elif statement.kind != "comment":
+                last_prop = None
             continue
+        last_prop = None
         if line.startswith("#"):
             (onto.comments if current is None and not onto.concepts else pending_comments).append(line[1:])
             continue
@@ -129,10 +174,17 @@ def loads(text: str) -> Ontology:
     return onto
 
 
+def dump_statement(statement: Statement, indent: str = "  ") -> list[str]:
+    lines = [f"{indent}{statement.render()}"]
+    lines.extend(f"{indent}  {c.render()}" for c in statement.children)
+    return lines
+
+
 def dump_concept(concept: Concept) -> list[str]:
     lines = [f"#{c}" for c in concept.leading_comments]
     lines.append(concept.header())
-    lines.extend(f"  {s.render()}" for s in concept.statements)
+    for s in concept.statements:
+        lines.extend(dump_statement(s))
     return lines
 
 

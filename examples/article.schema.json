@@ -4,37 +4,156 @@
   "description": "A published piece of writing in a magazine issue.",
   "type": "object",
   "properties": {
-    "id": { "type": "string" },
-    "headline": { "type": "string", "description": "Title shown on the card." },
-    "published": { "type": "string", "format": "date-time" },
-    "status": { "enum": ["draft", "in review", "live"] },
-    "word_count": { "type": ["integer", "null"] },
-    "authors": { "type": "array", "items": { "$ref": "#/$defs/Person" } },
+    "id": {
+      "type": "string"
+    },
+    "headline": {
+      "type": "string",
+      "description": "Title shown on the card.",
+      "maxLength": 120
+    },
+    "published": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "in review",
+        "live"
+      ]
+    },
+    "word_count": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "authors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Person"
+      }
+    },
     "issue": {
       "type": "object",
       "properties": {
-        "volume": { "type": "integer" },
-        "month": { "type": "string" }
+        "volume": {
+          "type": "integer"
+        },
+        "month": {
+          "type": "string"
+        }
       },
-      "required": ["volume"]
+      "required": [
+        "volume"
+      ]
     },
-    "keywords": { "type": "array", "items": { "type": "string" } }
+    "keywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "doi": {
+      "type": "string",
+      "pattern": "^10\\.\\d{4,9}/\\S+$",
+      "description": "Digital Object Identifier."
+    },
+    "link": {
+      "type": "string",
+      "format": "uri"
+    },
+    "reviewer": {
+      "$ref": "reviewer.schema.json",
+      "description": "Who checked the article."
+    },
+    "attachment": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Image"
+        },
+        {
+          "$ref": "#/$defs/Video"
+        }
+      ]
+    },
+    "rating": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    }
   },
-  "required": ["id", "headline", "status"],
+  "required": [
+    "id",
+    "headline",
+    "status"
+  ],
   "$defs": {
     "Person": {
       "type": "object",
       "description": "Someone credited on an article.",
       "properties": {
-        "name": { "type": "string" },
-        "orcid": { "type": "string" }
+        "name": {
+          "type": "string"
+        },
+        "orcid": {
+          "type": "string"
+        }
       },
-      "required": ["name"]
+      "required": [
+        "name"
+      ]
     },
     "Editor": {
       "allOf": [
-        { "$ref": "#/$defs/Person" },
-        { "properties": { "desk": { "type": "string" } } }
+        {
+          "$ref": "#/$defs/Person"
+        },
+        {
+          "properties": {
+            "desk": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "Image": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "alt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    },
+    "Video": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "seconds": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "url"
       ]
     }
   }

@@ -9,8 +9,13 @@ Rules (see SPEC.md, "Refresh rules"):
 3. If a person's line has the same key as an extracted line (for example both
    describe the property ``title``), the person's line wins and the extracted
    one is not written.
-4. A concept that disappears from the sources is removed only if it was
-   extracted and holds no lines of yours. Otherwise it is kept and reported.
+4. The same rules apply to the child lines under a property.
+5. A concept or property that disappears from the sources is removed only if it
+   was extracted and holds no lines of yours. Otherwise it is kept and reported.
+6. Renames: when an extracted concept disappears and one new concept appears
+   with mostly the same properties, it is treated as a rename and your lines
+   move to the new name. The same goes for a property with lines of yours
+   under it, when exactly one new property of the same type appears.
 """
 
 from __future__ import annotations
@@ -28,7 +33,12 @@ _SYMBOLS = {
     "concept_added": "+",
     "concept_removed": "-",
     "concept_kept": "!",
+    "property_kept": "!",
+    "concept_renamed": ">",
+    "property_renamed": ">",
 }
+
+RENAME_SIMILARITY = 0.6
 
 
 @dataclass
@@ -46,6 +56,12 @@ class Change:
             return f"{sym} concept {self.concept} (gone from the sources)"
         if self.kind == "concept_kept":
             return f"{sym} concept {self.concept} is gone from the sources; kept because it holds your lines"
+        if self.kind == "property_kept":
+            return f"{sym} {self.concept}: {self.line} is gone from the sources; kept because it holds your lines"
+        if self.kind == "concept_renamed":
+            return f"{sym} concept {self.previous} renamed to {self.concept}; your lines moved with it"
+        if self.kind == "property_renamed":
+            return f"{sym} {self.concept}: {self.previous} renamed to {self.line}; your lines moved with it"
         if self.kind == "changed":
             return f"{sym} {self.concept}: {self.line}  (was: {self.previous})"
         if self.kind == "kept_yours":
@@ -61,6 +77,9 @@ class DriftReport:
     def has_drift(self) -> bool:
         return any(c.kind != "kept_yours" for c in self.changes)
 
+    def add(self, kind: str, concept: str, line: str, previous: str = "") -> None:
+        self.changes.append(Change(kind, concept, line, previous))
+
     def render(self) -> str:
         if not self.changes:
             return "No drift: the file matches its sources."
@@ -73,8 +92,120 @@ class DriftReport:
         return "\n".join(lines + ["", summary + "."])
 
 
-def _is_people_owned(concept: Concept) -> bool:
-    return concept.tag is None or concept.tag.kind != "auto"
+def _has_yours(statement: Statement) -> bool:
+    """True if a property line holds child lines written by a person (or a proposal)."""
+    return any(not c.is_auto for c in statement.children)
+
+
+def _merge_children(old: list[Statement], new: list[Statement], where: str, report: DriftReport) -> list[Statement]:
+    return _merge_lines(old, new, where, report, renames=False)
+
+
+def _merge_lines(old: list[Statement], new: list[Statement], where: str, report: DriftReport,
+                 renames: bool = True) -> list[Statement]:
+    yours = [s for s in old if not s.is_auto]
+    your_keys = {s.key() for s in yours if s.kind != "comment"}
+    fresh: dict[tuple, Statement] = {}
+    for s in new:
+        fresh.setdefault(s.key(), s)
+    old_keys = {s.key() for s in old}
+
+    # Property renames: a vanished extracted property holding your child lines,
+    # and exactly one new extracted property of the same kind and type.
+    renamed: dict[tuple, Statement] = {}  # new key -> old statement
+    if renames:
+        added = [s for k, s in fresh.items() if s.is_property and k not in old_keys and k not in your_keys]
+        for s in old:
+            if not (s.is_auto and s.is_property) or s.key() in fresh or not _has_yours(s):
+                continue
+            matches = [a for a in added if a.kind == s.kind and a.target == s.target and a.key() not in renamed]
+            if len(matches) == 1:
+                renamed[matches[0].key()] = s
+    renamed_old = {id(s) for s in renamed.values()}
+
+    merged: list[Statement] = []
+    placed: set[tuple] = set()
+    for s in old:
+        key = s.key()
+        if not s.is_auto:
+            mine = copy.deepcopy(s)
+            if s.is_property:
+                match = fresh.get(key)
+                mine.children = _merge_children(s.children, match.children if match else [], f"{where}.{s.name}", report)
+            merged.append(mine)
+            continue
+        if key in your_keys or key in placed or id(s) in renamed_old:
+            continue
+        replacement = fresh.get(key)
+        if replacement is None:
+            if s.is_property and _has_yours(s):
+                kept = copy.deepcopy(s)
+                kept.tag = None
+                kept.children = [c for c in kept.children if not c.is_auto]
+                merged.append(kept)
+                report.add("property_kept", where, s.body())
+            else:
+                report.add("removed", where, s.body())
+            continue
+        if replacement.render() != s.render():
+            report.add("changed", where, replacement.body(), s.body())
+        line = copy.deepcopy(replacement)
+        if s.is_property:
+            line.children = _merge_children(s.children, replacement.children, f"{where}.{s.name}", report)
+        merged.append(line)
+        placed.add(key)
+
+    for key, s in fresh.items():
+        if key in placed:
+            continue
+        if key in your_keys:
+            mine = next(m for m in yours if m.key() == key)
+            if mine.body() != s.body():
+                report.add("kept_yours", where, mine.body(), s.body())
+            continue
+        line = copy.deepcopy(s)
+        if key in renamed:
+            before = renamed[key]
+            line.children = _merge_children(before.children, s.children, f"{where}.{s.name}", report)
+            report.add("property_renamed", where, s.name, before.name)
+        else:
+            report.add("added", where, s.body())
+        merged.append(line)
+        placed.add(key)
+    return merged
+
+
+def _prop_names(concept: Concept) -> set[str]:
+    return {s.name for s in concept.properties() if s.is_auto}
+
+
+def _holds_yours(concept: Concept) -> bool:
+    return bool(concept.leading_comments) or any(not s.is_auto or (s.is_property and _has_yours(s)) for s in concept.statements)
+
+
+def _concept_renames(current: Ontology, fresh: Ontology) -> dict[str, str]:
+    """Map old concept name -> new concept name for likely renames."""
+    gone = [c for n, c in current.concepts.items() if n not in fresh.concepts and c.tag is not None
+            and c.tag.kind == "auto" and _holds_yours(c)]
+    new = [c for n, c in fresh.concepts.items() if n not in current.concepts]
+    renames: dict[str, str] = {}
+    taken: set[str] = set()
+    for old in gone:
+        old_props = _prop_names(old)
+        scored = []
+        for cand in new:
+            if cand.name in taken:
+                continue
+            cand_props = {s.name for s in cand.properties()}
+            union = old_props | cand_props
+            shared = old_props & cand_props
+            if union and len(shared) >= 2 and len(shared) / len(union) >= RENAME_SIMILARITY:
+                scored.append((len(shared) / len(union), cand.name))
+        scored.sort(reverse=True)
+        if scored and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+            renames[old.name] = scored[0][1]
+            taken.add(scored[0][1])
+    return renames
 
 
 def merge(current: Ontology, fresh: Ontology) -> tuple[Ontology, DriftReport]:
@@ -88,67 +219,41 @@ def merge(current: Ontology, fresh: Ontology) -> tuple[Ontology, DriftReport]:
     for prefix, iri in fresh.prefixes.items():
         out.prefixes.setdefault(prefix, iri)
     report = DriftReport()
-    names = list(current.concepts) + [n for n in fresh.concepts if n not in current.concepts]
+    renames = _concept_renames(current, fresh)
+    renamed_to = set(renames.values())
 
-    for name in names:
-        old = current.concepts.get(name)
+    order: list[tuple[str, str]] = []  # (old name or "", new name)
+    for name in current.concepts:
+        order.append((name, renames.get(name, name)))
+    order += [("", n) for n in fresh.concepts if n not in current.concepts and n not in renamed_to]
+
+    for old_name, name in order:
+        old = current.concepts.get(old_name) if old_name else None
         new = fresh.concepts.get(name)
         if old is None:
             out.concepts[name] = copy.deepcopy(new)
-            report.changes.append(Change("concept_added", name, new.header()))
+            report.add("concept_added", name, new.header())
             continue
-
-        yours = [s for s in old.statements if not s.is_auto]
-        your_keys = {s.key() for s in yours if s.kind != "comment"}
+        if old_name != name:
+            report.add("concept_renamed", name, new.header(), old_name)
 
         if new is None:
-            if _is_people_owned(old):
-                out.concepts[name] = copy.deepcopy(old)
-                out.concepts[name].statements = copy.deepcopy(yours)
-                report.changes.extend(Change("removed", name, s.body()) for s in old.statements if s.is_auto)
+            yours = [s for s in old.statements if not s.is_auto or (s.is_property and _has_yours(s))]
+            if old.tag is None or old.tag.kind != "auto":
+                kept = copy.deepcopy(old)
+                kept.statements = _merge_lines(old.statements, [], name, report, renames=False)
+                out.concepts[name] = kept
                 continue
             if not yours and not old.leading_comments:
-                report.changes.append(Change("concept_removed", name, old.header()))
+                report.add("concept_removed", name, old.header())
                 continue
-            kept = Concept(name, None, list(yours), list(old.leading_comments))
-            out.concepts[name] = kept
-            report.changes.append(Change("concept_kept", name, old.header()))
+            silent = DriftReport()
+            statements = _merge_lines(old.statements, [], name, silent, renames=False)
+            out.concepts[name] = Concept(name, None, statements, list(old.leading_comments))
+            report.add("concept_kept", name, old.header())
             continue
 
-        fresh_auto: dict[tuple, Statement] = {}
-        for s in new.statements:
-            fresh_auto.setdefault(s.key(), s)
-
-        merged: list[Statement] = []
-        placed: set[tuple] = set()
-        for s in old.statements:
-            if not s.is_auto:
-                merged.append(s)
-                continue
-            key = s.key()
-            if key in your_keys or key in placed:
-                continue
-            replacement = fresh_auto.get(key)
-            if replacement is None:
-                report.changes.append(Change("removed", name, s.body()))
-                continue
-            if replacement.render() != s.render():
-                report.changes.append(Change("changed", name, replacement.body(), s.body()))
-            merged.append(replacement)
-            placed.add(key)
-
-        for key, s in fresh_auto.items():
-            if key in placed:
-                continue
-            if key in your_keys:
-                mine = next(m for m in yours if m.key() == key)
-                if mine.body() != s.body():
-                    report.changes.append(Change("kept_yours", name, mine.body(), s.body()))
-                continue
-            merged.append(s)
-            placed.add(key)
-            report.changes.append(Change("added", name, s.body()))
-
-        out.concepts[name] = Concept(name, new.tag, copy.deepcopy(merged), list(old.leading_comments))
+        statements = _merge_lines(old.statements, new.statements, name, report)
+        out.concepts[name] = Concept(name, new.tag, statements, list(old.leading_comments))
 
     return out, report

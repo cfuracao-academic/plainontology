@@ -1,6 +1,7 @@
 --
 -- PostgreSQL database dump (schema only), in the style of pg_dump --schema-only.
--- The library example from library.sql, plus a loan status enum and an array column.
+-- The library example from library.sql, plus PostgreSQL features: an enum, a domain, an array,
+-- comments, CHECK constraints, a view, a trigger, a second schema and a join table with data.
 --
 
 SET statement_timeout = 0;
@@ -16,6 +17,20 @@ CREATE TYPE public.loan_status AS ENUM (
     'returned',
     'lost'
 );
+
+CREATE SCHEMA archive;
+
+CREATE DOMAIN public.card_number AS character varying(10)
+	CONSTRAINT card_number_check CHECK (((VALUE)::text ~ '^C-[0-9]+$'::text));
+
+CREATE FUNCTION public.touch_loan() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$;
 
 SET default_tablespace = '';
 SET default_table_access_method = heap;
@@ -44,7 +59,25 @@ CREATE TABLE public.books (
     published date,
     in_print boolean,
     keywords text[],
-    author_id integer NOT NULL
+    pages integer,
+    author_id integer NOT NULL,
+    CONSTRAINT books_pages_check CHECK ((pages > 0))
+);
+
+COMMENT ON TABLE public.books IS 'A title the library holds; one record per edition.';
+
+COMMENT ON COLUMN public.books.isbn IS 'ISBN-13 without hyphens.';
+
+CREATE TABLE public.awards (
+    id integer NOT NULL,
+    name text NOT NULL
+);
+
+CREATE TABLE public.book_awards (
+    book_id integer NOT NULL,
+    award_id integer NOT NULL,
+    year integer NOT NULL,
+    CONSTRAINT book_awards_year_check CHECK (((year >= 1900) AND (year <= 2100)))
 );
 
 CREATE TABLE public.tags (
@@ -60,11 +93,32 @@ CREATE TABLE public.book_tags (
 CREATE TABLE public.loans (
     id integer NOT NULL,
     book_id integer NOT NULL,
-    member text NOT NULL,
+    member public.card_number NOT NULL,
     loaned_at timestamp with time zone NOT NULL,
     returned_at timestamp with time zone,
-    status public.loan_status DEFAULT 'open'::public.loan_status NOT NULL
+    status public.loan_status DEFAULT 'open'::public.loan_status NOT NULL,
+    updated_at timestamp with time zone,
+    CONSTRAINT loans_dates_check CHECK (((returned_at IS NULL) OR (returned_at >= loaned_at)))
 );
+
+COMMENT ON COLUMN public.loans.member IS 'Library card number.';
+
+CREATE TABLE archive.loans (
+    id integer NOT NULL,
+    book_id integer NOT NULL,
+    closed_at timestamp with time zone NOT NULL
+);
+
+CREATE VIEW public.open_loans AS
+ SELECT l.id,
+    l.member,
+    b.title AS book_title,
+    l.loaned_at
+   FROM (public.loans l
+     JOIN public.books b ON ((b.id = l.book_id)))
+  WHERE (l.returned_at IS NULL);
+
+COMMENT ON VIEW public.open_loans IS 'Loans not yet returned.';
 
 ALTER TABLE ONLY public.authors ALTER COLUMN id SET DEFAULT nextval('public.authors_id_seq'::regclass);
 
@@ -86,6 +140,15 @@ ALTER TABLE ONLY public.book_tags
 ALTER TABLE ONLY public.loans
     ADD CONSTRAINT loans_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.awards
+    ADD CONSTRAINT awards_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.book_awards
+    ADD CONSTRAINT book_awards_pkey PRIMARY KEY (book_id, award_id);
+
+ALTER TABLE ONLY archive.loans
+    ADD CONSTRAINT loans_pkey PRIMARY KEY (id);
+
 CREATE UNIQUE INDEX tags_label_idx ON public.tags USING btree (label);
 
 ALTER TABLE ONLY public.books
@@ -99,6 +162,17 @@ ALTER TABLE ONLY public.book_tags
 
 ALTER TABLE ONLY public.loans
     ADD CONSTRAINT loans_book_id_fkey FOREIGN KEY (book_id) REFERENCES public.books(id);
+
+ALTER TABLE ONLY public.book_awards
+    ADD CONSTRAINT book_awards_book_id_fkey FOREIGN KEY (book_id) REFERENCES public.books(id);
+
+ALTER TABLE ONLY public.book_awards
+    ADD CONSTRAINT book_awards_award_id_fkey FOREIGN KEY (award_id) REFERENCES public.awards(id);
+
+ALTER TABLE ONLY archive.loans
+    ADD CONSTRAINT loans_book_id_fkey FOREIGN KEY (book_id) REFERENCES public.books(id);
+
+CREATE TRIGGER loans_touch BEFORE INSERT OR UPDATE ON public.loans FOR EACH ROW EXECUTE FUNCTION public.touch_loan();
 
 --
 -- PostgreSQL database dump complete

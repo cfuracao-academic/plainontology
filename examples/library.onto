@@ -19,6 +19,7 @@ concept Book [auto: sqlite table books]
   has id : integer key [auto]
   has title : text required [auto]
   has isbn : text unique "ISBN-13 without hyphens."
+    length ..13 [auto]
   has published : date [auto]
   has in_print : boolean [auto]
   author -> Author required [auto: fk books.author_id]

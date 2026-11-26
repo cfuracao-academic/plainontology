@@ -1,4 +1,4 @@
-"""Command line interface: ``plainonto init|refresh|drift|check|export|validate|mcp``."""
+"""Command line interface: ``plainonto init|refresh|drift|check|export|validate|rename|mcp``."""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ from pathlib import Path
 from . import __version__
 from .api import compare, init, refresh
 from .check import check, validate_record
-from .export import to_linkml, to_turtle
-from .textformat import ParseError, load
+from .export import to_linkml, to_shacl, to_turtle
+from .rename import rename
+from .textformat import ParseError, load, save
 
 
 def _cmd_init(args) -> int:
@@ -50,12 +51,21 @@ def _cmd_check(args) -> int:
 def _cmd_export(args) -> int:
     onto = load(args.file)
     name = Path(args.file).stem
-    text = to_turtle(onto, args.base) if args.to == "turtle" else to_linkml(onto, name, args.base)
+    text = {"turtle": lambda: to_turtle(onto, args.base), "shacl": lambda: to_shacl(onto, args.base),
+            "linkml": lambda: to_linkml(onto, name, args.base)}[args.to]()
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8", newline="\n")
         print(f"Wrote {args.output}")
     else:
         sys.stdout.write(text)
+    return 0
+
+
+def _cmd_rename(args) -> int:
+    onto = load(args.file)
+    message = rename(onto, args.old, args.new)
+    save(args.file, onto)
+    print(message)
     return 0
 
 
@@ -116,9 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--strict", action="store_true", help="fail on warnings too")
     s.set_defaults(func=_cmd_check)
 
-    s = sub.add_parser("export", help="export to Turtle (OWL + SKOS) or LinkML")
+    s = sub.add_parser("export", help="export to Turtle (OWL + SKOS), SHACL shapes or LinkML")
     s.add_argument("file")
-    s.add_argument("--to", choices=["turtle", "linkml"], required=True)
+    s.add_argument("--to", choices=["turtle", "shacl", "linkml"], required=True)
     s.add_argument("-o", "--output")
     s.add_argument("--base", help="base IRI (default: the file's 'prefix :' line, else https://example.org/plainontology#)")
     s.set_defaults(func=_cmd_export)
@@ -128,6 +138,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("concept")
     s.add_argument("record", help="JSON file with one object or a list of objects, or - for stdin")
     s.set_defaults(func=_cmd_validate)
+
+    s = sub.add_parser("rename", help="rename a concept or Concept.property everywhere in the file")
+    s.add_argument("file")
+    s.add_argument("old", help="Concept or Concept.property")
+    s.add_argument("new", help="new name; renaming onto an existing name merges the two")
+    s.set_defaults(func=_cmd_rename)
 
     s = sub.add_parser("mcp", help="serve the file to AI agents over MCP (stdio)")
     s.add_argument("file")

@@ -11,7 +11,7 @@ import re
 import pytest
 
 from plainontology.extract import extract
-from plainontology.extract.sqllive import resolve_url
+from plainontology.extract.sqllive import with_driver
 
 from .conftest import EXAMPLES
 
@@ -22,7 +22,7 @@ def _lines(concepts):
 
 def _load(url: str, sql: str, split: bool, reset: list[str]) -> None:
     sa = pytest.importorskip("sqlalchemy")
-    engine = sa.create_engine(resolve_url(url))
+    engine = sa.create_engine(with_driver(url))
     try:
         with engine.begin() as conn:
             for statement in reset:

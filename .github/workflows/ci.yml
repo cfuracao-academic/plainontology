@@ -56,6 +56,23 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest -q -rs tests/test_sql_live.py
 
+  linkml-toolchain:
+    # The LinkML export must be accepted by the LinkML tools themselves.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e . linkml
+      - run: |
+          cd examples
+          plainonto init all.onto --from sqlite:library.sql --from jsonschema:article.schema.json --from tools:agent-tools.json
+          plainonto export all.onto --to linkml -o all.yaml
+          gen-json-schema all.yaml > /dev/null
+          gen-pydantic all.yaml > /dev/null
+          linkml-lint --validate-only all.yaml
+
   example-drift:
     # The example file must match its sources, as a demo of using drift as a CI gate.
     runs-on: ubuntu-latest
