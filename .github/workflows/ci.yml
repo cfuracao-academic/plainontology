@@ -185,10 +185,11 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build -t plainontology .
       - run: |
-          printf '%s\n' \
+          # Keep stdin open a few seconds: the server stops at end of input, maybe before answering.
+          { printf '%s\n' \
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
             '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 5; } \
             | timeout 60 docker run -i --rm plainontology > out.jsonl || true
           cat out.jsonl
           grep -q '"describe_concept"' out.jsonl
@@ -207,10 +208,10 @@ jobs:
           uvx --from check-jsonschema check-jsonschema --schemafile schema.json server.json
       - name: The registry command serves the tools
         run: |
-          printf '%s\n' \
+          { printf '%s\n' \
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
             '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 5; } \
             | timeout 120 uvx --with "mcp>=2,<3" --from . plainontology mcp examples/library.onto > out.jsonl || true
           cat out.jsonl
           grep -q '"describe_concept"' out.jsonl
