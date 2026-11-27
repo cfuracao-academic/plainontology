@@ -10,7 +10,18 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from .model import DATATYPES, RULE_KINDS, Concept, Ontology, Statement, enum_values, length_bounds, unique_columns
+from .model import (
+    DATATYPES,
+    NUMBER_TOKEN,
+    RULE_KINDS,
+    Concept,
+    Ontology,
+    Statement,
+    enum_items,
+    enum_values,
+    length_bounds,
+    unique_columns,
+)
 from .naming import safe_name
 
 
@@ -230,6 +241,18 @@ def _rules(where: str, s: Statement, value: Any) -> list[str]:
     return out
 
 
+def _enum_match(value: Any, allowed: str, quoted: bool) -> bool:
+    """A bare value that looks like a number matches only that number; a quoted one
+    only that text; other values match their text."""
+    if not quoted and NUMBER_TOKEN.fullmatch(allowed):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        return Decimal(str(value)) == Decimal(allowed)
+    if quoted and NUMBER_TOKEN.fullmatch(allowed):
+        return isinstance(value, str) and value == allowed
+    return str(value) == allowed
+
+
 def _subtypes(onto: Ontology, name: str) -> list[str]:
     """``name`` and every concept that is_a it, directly or indirectly."""
     out = [name]
@@ -257,9 +280,11 @@ def _check_value(onto: Ontology, where: str, s: Statement, value: Any, depth: in
             return []  # a reference by identifier
         return [f"{where}: expected a {s.target} object or its identifier"]
     t = s.target
-    allowed = enum_values(t)
-    if allowed is not None:
-        return [] if str(value) in allowed else [f"{where}: '{value}' is not one of {', '.join(allowed)}"]
+    items = enum_items(t)
+    if items is not None:
+        if any(_enum_match(value, v, quoted) for v, quoted in items):
+            return []
+        return [f"{where}: {value!r} is not one of {', '.join(v if not q else repr(v) for v, q in items)}"]
     ok = True
     if t == "text" or t == "binary":
         ok = isinstance(value, str)

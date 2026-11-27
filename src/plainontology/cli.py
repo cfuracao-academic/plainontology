@@ -254,6 +254,12 @@ def main(argv: list[str] | None = None) -> int:
     _utf8_output()
     args = build_parser().parse_args(argv)
     try:
+        from .extract import within_root
+
+        for attr in ("file", "record"):  # with PLAINONTO_SOURCE_ROOT set, every file must be inside it
+            value = getattr(args, attr, None)
+            if isinstance(value, str) and value != "-":
+                within_root(Path(value))
         return args.func(args)
     except Exception as exc:
         print(_error(exc), file=sys.stderr)

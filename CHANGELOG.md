@@ -27,7 +27,20 @@
 
 **Upgrading from 0.1.x**: singular concept names are better (`movies` is `Movie`, not `Movy`; `shelves` is `Shelf`). A concept whose name changes this way is matched by rename detection when it has two or more properties; otherwise the first refresh reports it as removed (or kept, with your lines) and added. Run `plainonto drift` after upgrading and use `plainonto rename FILE Old New` where needed.
 
-**Fixes from a ninth independent review** (the last before release; non-blocking findings are open issues for 0.2.1)
+**Before release: every remaining finding fixed** (no known issue is carried over to a later version)
+- With `PLAINONTO_SOURCE_ROOT` set, every command and the MCP server keep the `.onto` file (and a record file) inside it
+- A property renamed in the source stays where the old one was, next to the comment above it
+- Prisma's many-to-many tables (`_PostToTag`, columns `A` and `B`) give `tags -> Tag many`
+- Enums keep numbers and text apart: `enum(1|2)` holds numbers (from JSON Schema, OpenAPI and dbt), `enum("1"|"2")` holds text that looks like numbers; `validate` and SHACL follow
+- A foreign key declared on the column and again with `ADD CONSTRAINT` is one relation
+- mysqldump's `PARTITION BY` keeps the table's primary key and becomes a note
+- A property kept because the match was unclear shows the `rename` command on every run
+- A file of blank lines keeps its size
+- `ALTER VIEW ... RENAME TO` and `RENAME COLUMN` are applied; `ALTER INDEX ... RENAME TO` stays in its schema; MySQL `ALTER TABLE t RENAME AS u` works; each part of a comma-separated `ALTER TABLE` counts
+- `CREATE TABLE b LIKE a` (MySQL) keeps the index names, so a later `DROP INDEX` finds them; dropping an ordinary (not unique) index is quiet
+- `CONVERT TO CHARACTER SET`, table options, partition maintenance, `TABLESPACE`, identity and column storage settings never warn
+
+**Fixes from a ninth independent review**
 - PostgreSQL `ALTER TABLE t RENAME col TO new` (without the word COLUMN) renames the column, not the table
 - An enum column changed by `ALTER COLUMN ... TYPE` follows a later `ALTER TYPE ... ADD VALUE` (Prisma's enum migrations)
 - MySQL `CREATE TABLE b LIKE a` copies the table

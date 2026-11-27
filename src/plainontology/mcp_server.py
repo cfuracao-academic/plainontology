@@ -67,7 +67,9 @@ def search_text(onto: Ontology, query: str, limit: int = 10) -> list[str]:
 
 
 def build_server(path: Path, allow_proposals: bool = False) -> MCPServer:
-    path = Path(path)
+    from .extract import within_root
+
+    path = within_root(Path(path))  # with PLAINONTO_SOURCE_ROOT set, the file must be inside it
     server = MCPServer(name="plainontology", instructions=INSTRUCTIONS)
 
     @server.tool()

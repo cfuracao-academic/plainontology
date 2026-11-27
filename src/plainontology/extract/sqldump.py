@@ -77,6 +77,25 @@ def _fold_identifiers(node):
         return node
 
 
+def _top_level_parts(text: str) -> list[str]:
+    """Split at commas outside brackets and quotes."""
+    parts, depth, quote, start = [], 0, "", 0
+    for i, ch in enumerate(text):
+        if quote:
+            quote = "" if ch == quote else quote
+        elif ch in "'\"`":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            parts.append(text[start:i].strip())
+            start = i + 1
+    parts.append(text[start:].strip())
+    return [x for x in parts if x]
+
+
 def _to_property(node) -> str | None:
     """The new name in ALTER TABLE t RENAME col TO new (sqlglot keeps it as an option)."""
     for option in node.args.get("options") or []:
@@ -115,8 +134,19 @@ _HARMLESS_ALTER = re.compile(
     r"DETACH\s+PARTITION|VALIDATE\s+CONSTRAINT|ALTER\s+CONSTRAINT|OF\s|NOT\s+OF|ROW\s+LEVEL|"
     r"ALTER\s+(COLUMN\s+)?[\w\"]+\s+(SET|DROP)\s+(DEFAULT|STATISTICS|STORAGE|COMPRESSION)|"
     r"ALTER\s+(COLUMN\s+)?[\w\"]+\s+(ADD|SET|DROP)\s+(GENERATED|IDENTITY|EXPRESSION)|"
-    r"ALTER\s+(COLUMN\s+)?[\w\"]+\s+RESTART)",
+    r"ALTER\s+(COLUMN\s+)?[\w\"]+\s+RESTART|"
+    r"ALTER\s+(COLUMN\s+)?[\w\"`]+\s+(SET|RESET)\s*\(|"
+    r"ALTER\s+(COLUMN\s+)?[\w\"`]+\s+SET\s+(INCREMENT|START|CACHE|MINVALUE|MAXVALUE|NO\s|CYCLE|GENERATED)|"
+    r"CONVERT\s+TO|(DEFAULT\s+)?(CHARACTER\s+SET|CHARSET|COLLATE)\b|TABLESPACE\b|IN\s+TABLESPACE|SET\s+WITH\s+OIDS|"
+    r"ENGINE\s*=|AUTO_INCREMENT\s*=|ROW_FORMAT\s*=|KEY_BLOCK_SIZE\s*=|ALGORITHM\s*=|LOCK\s*=|"
+    r"PARTITION\s+BY|REMOVE\s+PARTITIONING|(ADD|DROP|TRUNCATE|COALESCE|REORGANIZE|EXCHANGE|ANALYZE|CHECK|"
+    r"OPTIMIZE|REBUILD|REPAIR|DISCARD|IMPORT)\s+PARTITION|ALTER\s+CHECK)",
     re.I,
+)
+_MYSQL_PARTITION = re.compile(
+    r"(?P<create>CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?P<name>[`\"\w.]+)[^;]*?)"
+    r"\s+PARTITION\s+BY\s+(?P<how>[^;]*?)(?=\s*;)",
+    re.I | re.S,
 )
 _WITH_DATA = re.compile(r"\bWITH\s+(?:NO\s+)?DATA\s*;", re.I)
 # MySQL view modifiers the SQL parser does not know; they change nothing about the columns.
@@ -230,6 +260,8 @@ class _Reader:
         self.table_comments: dict[str, str] = {}
         self.constraint_names: dict[tuple[str, str], tuple[str, object]] = {}
         self.check_count: dict[str, int] = {}
+        self.mysql_partitions: list[tuple[str, str]] = []  # (table, note) from PARTITION BY
+        self.view_renames: list[tuple[str, str, str]] = []  # (view, old column, new column)
         self.enum_columns: list[tuple[Column, str]] = []  # columns typed by a PostgreSQL enum
         self.warnings: list[str] = []
         self.partition_of: dict[str, str] = {}  # partition -> parent table
@@ -310,8 +342,10 @@ class _Reader:
             target = ref.this if ref is not None else None
             if target is not None:
                 fk = ForeignKey(_columns(node), self.qual(target))
-                t.foreign_keys.append(fk)
-                self.remember(t, name or f"{bare}_{'_'.join(fk.columns)}_fkey", "fk", fk)
+                same = next((f for f in t.foreign_keys if f.columns == fk.columns and f.table == fk.table), None)
+                if same is None:
+                    t.foreign_keys.append(fk)
+                self.remember(t, name or f"{bare}_{'_'.join(fk.columns)}_fkey", "fk", same or fk)
         elif isinstance(node, exp.UniqueColumnConstraint):
             schema = node.this
             cols = _columns(schema)
@@ -326,6 +360,8 @@ class _Reader:
                 self.remember(t, key_name or f"{bare}_{'_'.join(cols)}_key", "unique_set", cols)
         elif isinstance(node, exp.CheckColumnConstraint) and node.this is not None:
             self.add_check(t, node.this, name)
+        elif isinstance(node, exp.IndexColumnConstraint) and node.this is not None:
+            self.remember(t, node.this.name, "index", None)  # KEY / INDEX / FULLTEXT: nothing in the file
 
     def drop_constraint(self, t: Table, name: str) -> None:
         found = self.constraint_names.pop((t.name, name.lower()), None)
@@ -498,13 +534,16 @@ class _Reader:
 
     def alter(self, node) -> None:
         kind = (node.args.get("kind") or "TABLE").upper()
-        if kind == "INDEX":  # ALTER INDEX a RENAME TO b (PostgreSQL)
+        if kind == "INDEX":  # ALTER INDEX a RENAME TO b (PostgreSQL): index names are per schema
+            db = node.this.args.get("db")
             for action in node.args.get("actions") or []:
                 if _is(action, "AlterRename") and action.this is not None:
                     old = node.this.name.lower()
-                    for owner, cname in list(self.constraint_names):
-                        if cname == old:
-                            self.rename_constraint(owner, old, action.this.name)
+                    for owner in self.index_owners(old, db.name if db is not None else None):
+                        self.rename_constraint(owner, old, action.this.name)
+            return
+        if kind == "VIEW":
+            self.alter_view(node)
             return
         if kind != "TABLE":
             return
@@ -618,6 +657,10 @@ class _Reader:
         if options & {"ALL", "CONSTRAINTS"}:
             t.checks += list(source.checks)
         t.notes.append(f"columns copied from {source.name.split('.')[-1]} (LIKE)")
+        if include_all:  # MySQL copies the indexes with their names (not foreign keys)
+            for (owner, cname), (ckind, value) in list(self.constraint_names.items()):
+                if owner == source.name and ckind in ("pk", "unique", "unique_set", "check"):
+                    self.constraint_names[(t.name, cname)] = (ckind, list(value) if isinstance(value, list) else value)
 
     def statement(self, node) -> None:
         if isinstance(node, exp.Create):
@@ -651,6 +694,10 @@ class _Reader:
                     self.composites.add(name)
             elif kind == "VIEW" and node.args.get("expression") is not None:
                 self.views.append((self.qual(node.this), node.args["expression"]))
+            elif kind == "INDEX" and not node.args.get("unique") and isinstance(node.this, exp.Index):
+                table = node.this.args.get("table")
+                if table is not None and node.this.name and self.qual(table) in self.tables:
+                    self.remember(self.tables[self.qual(table)], node.this.name, "index", None)
             elif kind == "INDEX" and node.args.get("unique") and isinstance(node.this, exp.Index):
                 index = node.this
                 params = index.args.get("params")
@@ -728,6 +775,49 @@ class _Reader:
             if key in self.enums:
                 self.enum_columns.append((col, key))
 
+    def _mysql_partition(self, m: re.Match) -> str:
+        how = re.match(r"(?:LINEAR\s+)?\w+\s*(?:COLUMNS\s*)?\([^)]*\)|(?:LINEAR\s+)?KEY\s*\(\s*\)", m["how"], re.I)
+        text = " ".join((how[0] if how else m["how"].split("(")[0]).split()).replace("`", "")
+        self.mysql_partitions.append((self.qual_text(m["name"]), f"partitioned by {text}"))
+        return m["create"]
+
+    def alter_view(self, node) -> None:
+        """ALTER VIEW v RENAME TO w, ALTER VIEW v RENAME COLUMN a TO b. Views are read
+        at the end, so a column rename is kept and applied then."""
+        name = self.qual(node.this)
+        for action in node.args.get("actions") or []:
+            if _is(action, "AlterRename") and action.this is not None:
+                db = node.this.args.get("db")
+                new = qualified(
+                    db.name if db is not None and self.dialect != "mysql" else None, action.this.name, self.defaults
+                )
+                self.views = [(new if n == name else n, q) for n, q in self.views]
+                self.view_renames = [(new if n == name else n, a, b) for n, a, b in self.view_renames]
+                if name in self.table_comments:
+                    self.table_comments[new] = self.table_comments.pop(name)
+                name = new
+            elif _is(action, "RenameColumn") and action.this is not None and action.args.get("to") is not None:
+                self.view_renames.append((name, action.this.name, action.args["to"].name))
+            elif not any(n == name for n, _q in self.views):
+                self.warnings.append(f"ALTER VIEW {name}: no such view in the file; skipped")
+            else:
+                self.warnings.append(f"skipped a statement it could not read: ALTER VIEW {name} ...")
+
+    def index_owners(self, name: str, schema: str | None) -> list[str]:
+        """Tables with an index or constraint called ``name`` in ``schema`` (or the
+        default schema; failing that, the one schema that has it)."""
+        if schema is not None and schema.lower() in self.defaults:
+            schema = None
+
+        def in_schema(owner: str) -> bool:
+            return (owner.rsplit(".", 1)[0] if "." in owner else None) == schema
+
+        owners = [tn for (tn, cn) in self.constraint_names if cn == name.lower() and in_schema(tn)]
+        if not owners and schema is None:
+            anywhere = [tn for (tn, cn) in self.constraint_names if cn == name.lower()]
+            owners = anywhere if len(anywhere) == 1 else []
+        return owners
+
     def drop_index(self, name: str, table: str | None, schema: str | None = None) -> None:
         """DROP INDEX: undo a unique index (other indexes do not change the file).
         Index names are per schema in PostgreSQL: only tables of that schema match."""
@@ -756,6 +846,15 @@ class _Reader:
         table = re.match(
             r"^TABLE\s+(?:(?:ONLY|IF\s+EXISTS)\s+)*([\w.\"`]+)\s+(.*)$", flat, re.I
         )  # ONLY and IF EXISTS in either order
+        if table and len(parts := _top_level_parts(table[2])) > 1:
+            for part in parts:  # ENABLE ROW LEVEL SECURITY, ADD COLUMN z int: each part counts
+                try:
+                    node = sqlglot.parse_one(f"ALTER TABLE {table[1]} {part}", read=self.dialect)
+                except SqlglotError:
+                    self.warnings.append(f"skipped a statement it could not read: ALTER TABLE {table[1]} {part[:50]}")
+                    continue
+                self.statement(node)
+            return
         if table:
             name, rest = self.qual_text(table[1]), table[2]
             schema = re.match(r"^SET\s+SCHEMA\s+([\w\"]+)$", rest, re.I)
@@ -956,6 +1055,10 @@ class _Reader:
             sql = _DELIMITER.sub("", sql).replace(";;", ";")
             sql = _MYSQL_VIEW_MODIFIERS.sub(lambda m: f"CREATE {m[1] or ''}VIEW", sql)
             sql = _CHARSET_INTRODUCER.sub("'", sql)  # _utf8mb4'text' is just 'text'
+            sql = _outside_quotes(sql, lambda part: re.sub(r"\bRENAME\s+AS\b", "RENAME TO", part, flags=re.I))
+            # MySQL partitioning (PARTITION BY ... after the table options) is not read by
+            # the parser: take it off the statement and keep it as a note.
+            sql = _MYSQL_PARTITION.sub(self._mysql_partition, sql)
             # The parser does not take float unsigned; decimal unsigned is read (same datatype, min 0).
             sql = _outside_quotes(sql, lambda part: _FLOAT_UNSIGNED.sub(r"DECIMAL\1 UNSIGNED", part))
         if self.dialect == "postgres":
@@ -997,9 +1100,15 @@ class _Reader:
             if name in self.selected_tables:
                 self.tables[name].kind = "table"
                 self.tables[name].notes.append("created from a query (CREATE TABLE ... AS)")
+        for name, old, new in self.view_renames:
+            if name in self.tables:
+                self.rename_column(self.tables[name], old, new)
         self.apply_comments()
         self.triggers(sql)
         self.fold_partitions()
+        for name, note in self.mysql_partitions:
+            if name in self.tables:
+                self.tables[name].notes.append(note)
 
 
 def tables_from_ddl(sql: str, dialect: str, warnings: list[str] | None = None) -> list[Table]:

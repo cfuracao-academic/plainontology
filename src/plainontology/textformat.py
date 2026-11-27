@@ -276,7 +276,9 @@ def loads(text: str) -> Ontology:
     release_held()
     onto.trailing_comments = pending
     onto.trailing_blank_before = pending_gap
-    onto.final_newline = text.endswith("\n") or not text
+    onto.final_newline = text.endswith("\n")
+    if first:  # nothing but blank lines: keep them as they are
+        onto.leading_blanks, onto.final_newline, blanks = max(blanks - 1, 0), bool(text), 0
     onto.trailing_blanks = max(blanks - 1, 0) if onto.final_newline else blanks
     while onto.preamble and onto.preamble[-1][0] == "blank":
         onto.preamble.pop()

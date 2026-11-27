@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from ..model import AUTO, Concept, Statement, Tag, make_enum, number_text
-from ..naming import concept_name, pascal, plural, relation_name, safe_name
+from ..naming import concept_name, pascal, plural, relation_name, safe_name, singular, words
 
 
 @dataclass
@@ -81,8 +81,8 @@ def fold_partition(parent: Table, child: Table) -> None:
             parent.foreign_keys.append(ForeignKey(list(fk.columns), fk.table))
 
 
-def enum_type(values: list) -> str:
-    return make_enum(values)
+def enum_type(values: list, numbers: bool = False) -> str:
+    return make_enum(values, numbers)
 
 
 _LENGTH_RE = re.compile(
@@ -245,6 +245,15 @@ def _children(col: Column, rules: dict[str, str], notes: list[str]) -> list[Stat
         if all(s.value != extra for s in out if s.kind == "pattern"):
             out.append(Statement("pattern", value=extra, tag=AUTO))
     return out
+
+
+def _link_name(fk: ForeignKey) -> str:
+    """The relation name for a join table link: from the column (book_id is book), or
+    from the linked table when the column says nothing (Prisma's A and B)."""
+    name = relation_name(fk.columns[0])
+    if len(name.strip("_")) <= 1:
+        name = safe_name("_".join(w.lower() for w in words(singular(fk.table.split(".")[-1]))))
+    return name
 
 
 def _concept_names(tables: list[Table], warnings: list[str] | None) -> dict[str, str]:
@@ -424,7 +433,7 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
         source.add_property(
             Statement(
                 "rel",
-                name=plural(relation_name(other.columns[0])),
+                name=plural(_link_name(other)),
                 target=cnames.get(other.table, concept_name(other.table)),
                 flags=("many",),
                 tag=Tag("auto", f"via {t.name}"),

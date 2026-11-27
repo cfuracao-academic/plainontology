@@ -97,28 +97,41 @@ def number_text(value: object) -> str:
 _PLAIN_ENUM_VALUE = re.compile(r'^[^|()"\s\\][^|()"\\]*(?<!\s)$')
 
 
-def make_enum(values: list) -> str:
-    """``enum(a|b)``; values that contain ``|``, brackets, quotes or spaces at
-    either end are written quoted: ``enum(S|"M (medium)"|"L|XL")``."""
+NUMBER_TOKEN = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def make_enum(values: list, numbers: bool = False) -> str:
+    """``enum(a|b)``. With ``numbers`` the values are numbers and written bare:
+    ``enum(1|2|3)``. Text values that contain ``|``, brackets, quotes or spaces at
+    either end, or that look like a number, are written quoted:
+    ``enum(S|"M (medium)"|"L|XL")``, ``enum("1"|"2")``."""
     parts = []
     for v in values:
         text = str(v)
-        plain = _PLAIN_ENUM_VALUE.match(text) and not any(unicodedata.category(ch) in ("Cc", "Zl", "Zp") for ch in text)
+        if numbers:
+            parts.append(number_text(text))
+            continue
+        plain = (
+            _PLAIN_ENUM_VALUE.match(text)
+            and not NUMBER_TOKEN.fullmatch(text)
+            and not any(unicodedata.category(ch) in ("Cc", "Zl", "Zp") for ch in text)
+        )
         parts.append(text if plain else quote(text))
     return f"enum({'|'.join(parts)})" if parts else "text"
 
 
-def enum_values(datatype: str) -> list[str] | None:
-    """Return the allowed values of an ``enum(a|b)`` datatype, else None."""
+def enum_items(datatype: str) -> list[tuple[str, bool]] | None:
+    """The values of an ``enum(a|b)`` datatype with whether each was quoted, else None.
+    A bare value that looks like a number is a number; a quoted one is text."""
     if not (datatype.startswith("enum(") and datatype.endswith(")")):
         return None
-    inner, values, i = datatype[5:-1], [], 0
+    inner, items, i = datatype[5:-1], [], 0
     while i < len(inner):
         if inner[i] == '"':
             j = i + 1
             while j < len(inner) and inner[j] != '"':
                 j += 2 if inner[j] == "\\" else 1
-            values.append(unquote(inner[i + 1 : j]))
+            items.append((unquote(inner[i + 1 : j]), True))
             i = j + 1
             while i < len(inner) and inner[i] != "|":
                 i += 1
@@ -127,9 +140,15 @@ def enum_values(datatype: str) -> list[str] | None:
         j = inner.find("|", i)
         j = len(inner) if j < 0 else j
         if inner[i:j].strip():
-            values.append(inner[i:j].strip())
+            items.append((inner[i:j].strip(), False))
         i = j + 1
-    return values
+    return items
+
+
+def enum_values(datatype: str) -> list[str] | None:
+    """Return the allowed values of an ``enum(a|b)`` datatype, else None."""
+    items = enum_items(datatype)
+    return None if items is None else [v for v, _quoted in items]
 
 
 def unique_columns(name: str) -> list[str]:

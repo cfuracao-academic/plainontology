@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 
-from ..model import Concept, Ontology, Statement, enum_values, length_bounds
+from ..model import NUMBER_TOKEN, Concept, Ontology, Statement, enum_items, length_bounds
 from .rdf import XSD, Namer, base_of, literal, typed
 
 _STANDARD = ("rdf", "rdfs", "sh", "xsd")
@@ -57,9 +57,15 @@ def _property(n: Namer, c: Concept, s: Statement) -> str:
         else:
             parts.append("sh:nodeKind sh:IRI")
     else:
-        values = enum_values(s.target)
-        if values is not None:
-            parts.append("sh:in ( " + " ".join(literal(v) for v in values) + " )")
+        items = enum_items(s.target)
+        if items is not None:
+            members = [
+                typed(v, "xsd:decimal" if "." in v else "xsd:integer")
+                if not quoted and NUMBER_TOKEN.fullmatch(v)
+                else literal(v)
+                for v, quoted in items
+            ]
+            parts.append("sh:in ( " + " ".join(members) + " )")
         elif s.target in XSD:
             parts.append(f"sh:datatype {XSD[s.target]}")
         integer = s.target == "integer"

@@ -61,7 +61,7 @@ concept NAME [TAG]
 | `note "text"[@lang]` | anything else worth knowing | meaning |
 | `# text` | a comment | |
 
-**Types:** `text`, `integer`, `decimal`, `boolean`, `date`, `datetime`, `binary`, `json`, `any`, or `enum(a|b|c)`. An enum value that contains `|`, a bracket, a quote, or spaces at either end is written as a quoted string: `enum(S|"M (medium)"|"L|XL")`.
+**Types:** `text`, `integer`, `decimal`, `boolean`, `date`, `datetime`, `binary`, `json`, `any`, or `enum(a|b|c)`. An enum value that contains `|`, a bracket, a quote, or spaces at either end is written as a quoted string: `enum(S|"M (medium)"|"L|XL")`. A bare value that looks like a number is a number (`enum(1|2|3)` accepts the JSON numbers 1, 2 and 3); text that looks like a number is quoted (`enum("01"|"02")` accepts those strings).
 
 **Flags:** `key` (identifier), `required`, `unique`, `many` (list or to-many relation).
 

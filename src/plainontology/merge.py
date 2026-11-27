@@ -209,6 +209,7 @@ def _merge_lines(
         for old_name, new_name in _unique_pairs(candidates).items():
             renamed[("prop", new_name)] = by_name[old_name]
     renamed_old = {id(s) for s in renamed.values()}
+    new_key_of = {id(s): k for k, s in renamed.items()}
 
     # Lines of yours under an extracted line that you overrode with your own line
     # of the same key move to your line, so overriding never loses them.
@@ -268,6 +269,15 @@ def _merge_lines(
             hand_over(s)
             continue
         if id(s) in renamed_old:
+            # The renamed property is written where the old one was, next to anything above it.
+            new_key = new_key_of[id(s)]
+            line = copy.deepcopy(fresh[new_key])
+            line.blank_before = s.blank_before
+            line.children = _merge_children(s.children, fresh[new_key].children, f"{where}.{line.name}", report)
+            report.add("property_renamed", where, line.name, s.name)
+            merged.append(line)
+            placed.add(new_key)
+            placed_line[new_key] = line
             continue
         replacement = fresh.get(key)
         if replacement is None:
@@ -286,12 +296,13 @@ def _merge_lines(
                     and a.kind == s.kind
                     and a.target == (target_map or {}).get(s.target, s.target)
                 ]
-                hint = ""
                 if maybe:
                     hint = (
                         f"if it was renamed to {' or '.join(maybe)}, run: "
                         f"plainonto rename FILE {where}.{s.name} {maybe[0]}"
                     )
+                else:
+                    hint = f"if it was renamed, run: plainonto rename FILE {where}.{s.name} NEW_NAME"
                 report.add("property_kept", where, s.body(), hint)
             else:
                 report.add("removed", where, s.body())
