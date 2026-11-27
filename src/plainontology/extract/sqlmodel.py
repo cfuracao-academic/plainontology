@@ -293,6 +293,8 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
     Two tables that would get the same concept name (``book`` and ``books``) get
     distinct names, and a warning says so."""
     cnames = _concept_names(tables, warnings)
+    for t in tables:  # a foreign key declared twice (column and ADD CONSTRAINT) is one link
+        t.foreign_keys = list({(tuple(fk.columns), fk.table): fk for fk in t.foreign_keys}.values())
     by_name = {t.name: t for t in tables}
     concepts: dict[str, Concept] = {}
     join_links: list[tuple[Table, ForeignKey, ForeignKey]] = []
@@ -335,8 +337,7 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
                 r = rules.setdefault(col.name, {})
                 r["min"] = _num(max(Decimal(r["min"]), Decimal(0))) if "min" in r else "0"
         positions = {c.name: i for i, c in enumerate(t.columns)}
-        unique_fks = list({(tuple(fk.columns), fk.table): fk for fk in reversed(t.foreign_keys)}.values())[::-1]
-        fks = sorted(unique_fks, key=lambda fk: min(positions.get(c, 0) for c in fk.columns))  # declared twice: one
+        fks = sorted(t.foreign_keys, key=lambda fk: min(positions.get(c, 0) for c in fk.columns))
         fk_cols = {c for fk in fks for c in fk.columns}
         if t.name in pure:
             join_links.append((t, fks[0], fks[1]))

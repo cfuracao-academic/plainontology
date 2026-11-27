@@ -148,14 +148,14 @@ _MYSQL_PARTITION_MAINTENANCE = re.compile(
     r"OPTIMIZE|REBUILD|REPAIR|DISCARD|IMPORT)\s+PARTITION|REMOVE\s+PARTITIONING|PARTITION\s+BY)\b[^;]*;",
     re.I,
 )
-_TEXT_RE = re.compile(r"--[^\n]*|#[^\n]*|/\*.*?\*/|'(?:[^'\\]|\\.|'')*'|\"[^\"]*\"", re.S)
+_TEXT_RE = re.compile(r"`[^`]*`|--[^\n]*|#[^\n]*|/\*.*?\*/|'(?:[^'\\]|\\.|'')*'|\"[^\"]*\"", re.S)
 
 
 def _sub_outside_text(sql: str, pattern: re.Pattern, repl) -> str:
     """``pattern.sub(repl, sql)``, matching only where no string or comment is: the
     pattern runs on a copy with strings and comments blanked, and the matched spans
     of the original text are replaced."""
-    masked = _TEXT_RE.sub(lambda m: "".join("\n" if ch == "\n" else " " for ch in m[0]), sql)
+    masked = _TEXT_RE.sub(lambda m: "".join("\n" if ch == "\n" else "_" for ch in m[0]), sql)
     out, last = [], 0
     for m in pattern.finditer(masked):
         out += [sql[last : m.start()], repl(_Span(sql, m))]  # groups give the original text

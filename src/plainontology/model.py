@@ -115,7 +115,7 @@ def make_enum(values: list, numbers: bool | None = False) -> str:
             continue
         plain = (
             _PLAIN_ENUM_VALUE.match(text)
-            and not NUMBER_TOKEN.fullmatch(text)
+            and not re.fullmatch(r"-?\d+(?:\.\d+)?", text)  # digits as text: quoted, leading zeros too
             and not any(unicodedata.category(ch) in ("Cc", "Zl", "Zp") for ch in text)
         )
         parts.append(text if plain else quote(text))

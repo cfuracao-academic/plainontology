@@ -31,9 +31,9 @@
 - With `PLAINONTO_SOURCE_ROOT` set, every command and the MCP server keep the `.onto` file (and a record file) inside it
 - A property renamed in the source stays where the old one was, next to the comment above it
 - Prisma's many-to-many tables (`_PostToTag`, columns `A` and `B`) give `tags -> Tag many`
-- Enums keep numbers and text apart: a bare number such as `1` or `2.5` is a number, quoted values and codes with leading zeros (`01`) are text, and a mixed JSON Schema enum (`[1, 2, "max"]`) is typed value by value; `validate` and SHACL follow, and a `validate` error says which is which
+- Enums keep numbers and text apart: a bare number such as `1` or `2.5` is a number, quoted values and codes with leading zeros (`01`) are text (extracted text codes made of digits are always written quoted, `enum("01"|"10")`), and a mixed JSON Schema enum (`[1, 2, "max"]`) is typed value by value; `validate` and SHACL follow, and a `validate` error says which is which
 - A foreign key declared on the column and again with `ADD CONSTRAINT` is one relation; dropping either declaration keeps the other (the usual add, validate, drop swap)
-- mysqldump's `PARTITION BY` keeps the table's primary key and becomes a note (only outside quoted text); partition maintenance (`ADD`, `DROP`, `TRUNCATE ... PARTITION` and the rest) is left out quietly
+- mysqldump's `PARTITION BY` keeps the table's primary key and becomes a note (only outside quoted text and comments, fast on long comments); partition maintenance (`ADD`, `DROP`, `TRUNCATE ... PARTITION` and the rest) is left out quietly
 - A property kept because the match was unclear shows the `rename` command on every run
 - A file of blank lines keeps its size
 - `ALTER VIEW ... RENAME TO`, `RENAME COLUMN` and `AS SELECT ...` are applied, other `ALTER VIEW` options are quiet; `ALTER INDEX ... RENAME TO` stays in its schema; MySQL `ALTER TABLE t RENAME AS u` works; each part of a comma-separated `ALTER TABLE` counts

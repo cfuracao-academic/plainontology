@@ -361,7 +361,8 @@ class SchemaWalker:
         enums = [o.get("enum", [o["const"]] if "const" in o else None) for o in options]
         if all(e is not None for e in enums):
             raw = [v for e in enums for v in (e or []) if v is not None]
-            return "has", make_enum(list(dict.fromkeys(raw)), None), ""
+            unique = {json.dumps(v, sort_keys=True, default=str): v for v in reversed(raw)}  # objects too
+            return "has", make_enum(list(unique.values())[::-1], None), ""
         resolved = []
         for o in options:
             walker, node = self.resolve(o["$ref"]) if "$ref" in o else (self, o)
