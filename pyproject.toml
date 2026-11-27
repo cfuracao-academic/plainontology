@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "plainontology"
-version = "0.2.0"
+version = "0.2.1"
 description = "Write down the ontology and semantic layer a system already has as one plain text file: editable, diffable, exportable to OWL/SKOS and LinkML, and served to AI agents over MCP."
 readme = "README.md"
 requires-python = ">=3.10"

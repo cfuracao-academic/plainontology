@@ -1,0 +1,44 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.cfuracao-academic/plainontology",
+  "title": "PlainOntology",
+  "description": "Serves the plain text ontology of your databases, JSON Schemas and APIs to AI agents.",
+  "repository": {
+    "url": "https://github.com/cfuracao-academic/plainontology",
+    "source": "github"
+  },
+  "websiteUrl": "https://cfuracao-academic.github.io/plainontology/",
+  "version": "0.2.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "plainontology",
+      "version": "0.2.1",
+      "runtimeHint": "uvx",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--with",
+          "value": "mcp>=2,<3",
+          "description": "Installs the MCP extra next to the package."
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        },
+        {
+          "type": "positional",
+          "valueHint": "onto_file",
+          "description": "Path to the .onto file to serve (create one with plainonto init).",
+          "format": "filepath",
+          "isRequired": true
+        }
+      ]
+    }
+  ]
+}

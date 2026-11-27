@@ -1,5 +1,7 @@
 # PlainOntology
 
+<!-- mcp-name: io.github.cfuracao-academic/plainontology -->
+
 [![CI](https://github.com/cfuracao-academic/plainontology/actions/workflows/ci.yml/badge.svg)](https://github.com/cfuracao-academic/plainontology/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/plainontology)](https://pypi.org/project/plainontology/)
 [![Python](https://img.shields.io/badge/python-3.10%20to%203.13-blue)](pyproject.toml)

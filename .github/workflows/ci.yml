@@ -193,6 +193,28 @@ jobs:
           cat out.jsonl
           grep -q '"describe_concept"' out.jsonl
 
+  mcp-registry-entry:
+    # server.json must match the registry schema, and the command it describes
+    # (uvx --with mcp plainontology mcp FILE) must serve the tools.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Valid against the registry schema
+        run: |
+          schema=$(python3 -c "import json; print(json.load(open('server.json'))['\$schema'])")
+          curl --fail --silent --show-error "$schema" -o schema.json
+          uvx --from check-jsonschema check-jsonschema --schemafile schema.json server.json
+      - name: The registry command serves the tools
+        run: |
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | timeout 120 uvx --with "mcp>=2,<3" --from . plainontology mcp examples/library.onto > out.jsonl || true
+          cat out.jsonl
+          grep -q '"describe_concept"' out.jsonl
+
   example-drift:
     # The example file must match its sources, as a demo of using drift as a CI gate.
     runs-on: ubuntu-latest

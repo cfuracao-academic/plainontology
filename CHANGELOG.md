@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 (27 November 2026)
+
+- Listed in the official MCP Registry as `io.github.cfuracao-academic/plainontology` (`server.json`; the README carries the registry's ownership line). Each release now publishes the registry entry after PyPI
+- `Dockerfile` and `glama.json` for the Glama MCP directory; CI checks the image serves the MCP tools
+- No code changes
+
 ## 0.2.0 (27 November 2026)
 
 **Scope**: a "Scope" section in the README and the sources page says what PlainOntology reads and where edge cases may fall outside it; the command line repeats it under any `?` warnings.

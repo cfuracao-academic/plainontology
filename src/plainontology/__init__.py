@@ -1,7 +1,7 @@
 """PlainOntology: write down the ontology and semantic layer a system already has,
 as one plain text file that people can edit and agents can read."""
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 from .check import check, validate_record
 from .merge import DriftReport, merge
