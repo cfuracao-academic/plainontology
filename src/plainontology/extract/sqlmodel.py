@@ -81,7 +81,7 @@ def fold_partition(parent: Table, child: Table) -> None:
             parent.foreign_keys.append(ForeignKey(list(fk.columns), fk.table))
 
 
-def enum_type(values: list, numbers: bool = False) -> str:
+def enum_type(values: list, numbers: bool | None = False) -> str:
     return make_enum(values, numbers)
 
 
@@ -335,7 +335,8 @@ def tables_to_concepts(tables: list[Table], label: str, warnings: list[str] | No
                 r = rules.setdefault(col.name, {})
                 r["min"] = _num(max(Decimal(r["min"]), Decimal(0))) if "min" in r else "0"
         positions = {c.name: i for i, c in enumerate(t.columns)}
-        fks = sorted(t.foreign_keys, key=lambda fk: min(positions.get(c, 0) for c in fk.columns))
+        unique_fks = list({(tuple(fk.columns), fk.table): fk for fk in reversed(t.foreign_keys)}.values())[::-1]
+        fks = sorted(unique_fks, key=lambda fk: min(positions.get(c, 0) for c in fk.columns))  # declared twice: one
         fk_cols = {c for fk in fks for c in fk.columns}
         if t.name in pure:
             join_links.append((t, fks[0], fks[1]))

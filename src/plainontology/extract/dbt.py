@@ -40,7 +40,6 @@ class _Column:
         self.unique = False
         self.key = False
         self.enum: list[str] | None = None
-        self.enum_numbers = False  # accepted_values given as numbers
         self.target: str | None = None  # concept name of a relationships test
         self.low: Any = None
         self.high: Any = None
@@ -146,9 +145,7 @@ def extract_dbt(path: Path, warnings: list[str] | None = None) -> list[Concept]:
         elif test == "unique":
             c.unique = True
         elif test == "accepted_values":
-            raw = list(kwargs.get("values") or [])
-            c.enum = [str(v) for v in raw]
-            c.enum_numbers = bool(raw) and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in raw)
+            c.enum = list(kwargs.get("values") or [])  # 1 is a number, "1" is text
         elif test == "relationships":
             c.target = _ref_target(str(kwargs.get("to", "")), names)
         elif test == "accepted_range" and namespace in ("dbt_utils", ""):
@@ -191,7 +188,7 @@ def extract_dbt(path: Path, warnings: list[str] | None = None) -> list[Concept]:
                     tag=AUTO,
                 )
             else:
-                datatype = enum_type(c.enum, c.enum_numbers) if c.enum else c.datatype
+                datatype = enum_type(c.enum, None) if c.enum else c.datatype
                 line = Statement(
                     "has",
                     name=safe_name(c.name),

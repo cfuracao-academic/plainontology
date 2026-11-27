@@ -25,18 +25,18 @@
 - LinkML: mixins for further parents, `unique_keys`, rules, multilingual labels (checked with the LinkML tools in CI)
 - Turtle: language tags, labels on properties, `owl:hasKey`
 
-**Upgrading from 0.1.x**: singular concept names are better (`movies` is `Movie`, not `Movy`; `shelves` is `Shelf`). A concept whose name changes this way is matched by rename detection when it has two or more properties; otherwise the first refresh reports it as removed (or kept, with your lines) and added. Run `plainonto drift` after upgrading and use `plainonto rename FILE Old New` where needed.
+**Upgrading from 0.1.x**: in enums you wrote yourself, a bare number now means a number; write text codes that look like numbers in quotes (`enum("1"|"2")`). Codes with leading zeros (`01`) stay text either way. Extracted enum lines are rewritten once on the first refresh. singular concept names are better (`movies` is `Movie`, not `Movy`; `shelves` is `Shelf`). A concept whose name changes this way is matched by rename detection when it has two or more properties; otherwise the first refresh reports it as removed (or kept, with your lines) and added. Run `plainonto drift` after upgrading and use `plainonto rename FILE Old New` where needed.
 
 **Before release: every remaining finding fixed** (no known issue is carried over to a later version)
 - With `PLAINONTO_SOURCE_ROOT` set, every command and the MCP server keep the `.onto` file (and a record file) inside it
 - A property renamed in the source stays where the old one was, next to the comment above it
 - Prisma's many-to-many tables (`_PostToTag`, columns `A` and `B`) give `tags -> Tag many`
-- Enums keep numbers and text apart: `enum(1|2)` holds numbers (from JSON Schema, OpenAPI and dbt), `enum("1"|"2")` holds text that looks like numbers; `validate` and SHACL follow
-- A foreign key declared on the column and again with `ADD CONSTRAINT` is one relation
-- mysqldump's `PARTITION BY` keeps the table's primary key and becomes a note
+- Enums keep numbers and text apart: a bare number such as `1` or `2.5` is a number, quoted values and codes with leading zeros (`01`) are text, and a mixed JSON Schema enum (`[1, 2, "max"]`) is typed value by value; `validate` and SHACL follow, and a `validate` error says which is which
+- A foreign key declared on the column and again with `ADD CONSTRAINT` is one relation; dropping either declaration keeps the other (the usual add, validate, drop swap)
+- mysqldump's `PARTITION BY` keeps the table's primary key and becomes a note (only outside quoted text); partition maintenance (`ADD`, `DROP`, `TRUNCATE ... PARTITION` and the rest) is left out quietly
 - A property kept because the match was unclear shows the `rename` command on every run
 - A file of blank lines keeps its size
-- `ALTER VIEW ... RENAME TO` and `RENAME COLUMN` are applied; `ALTER INDEX ... RENAME TO` stays in its schema; MySQL `ALTER TABLE t RENAME AS u` works; each part of a comma-separated `ALTER TABLE` counts
+- `ALTER VIEW ... RENAME TO`, `RENAME COLUMN` and `AS SELECT ...` are applied, other `ALTER VIEW` options are quiet; `ALTER INDEX ... RENAME TO` stays in its schema; MySQL `ALTER TABLE t RENAME AS u` works; each part of a comma-separated `ALTER TABLE` counts
 - `CREATE TABLE b LIKE a` (MySQL) keeps the index names, so a later `DROP INDEX` finds them; dropping an ordinary (not unique) index is quiet
 - `CONVERT TO CHARACTER SET`, table options, partition maintenance, `TABLESPACE`, identity and column storage settings never warn
 

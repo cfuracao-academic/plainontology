@@ -284,7 +284,12 @@ def _check_value(onto: Ontology, where: str, s: Statement, value: Any, depth: in
     if items is not None:
         if any(_enum_match(value, v, quoted) for v, quoted in items):
             return []
-        return [f"{where}: {value!r} is not one of {', '.join(v if not q else repr(v) for v, q in items)}"]
+        if not any(NUMBER_TOKEN.fullmatch(v) for v, _quoted in items):
+            return [f"{where}: {value!r} is not one of {', '.join(v for v, _quoted in items)}"]
+        # Numbers and text that looks like numbers: say which is which.
+        shown = ", ".join(f'"{v}"' if quoted else v for v, quoted in items)
+        what = "a number" if isinstance(value, (int, float)) and not isinstance(value, bool) else "text"
+        return [f"{where}: {value!r} ({what}) is not one of {shown} (bare numbers are numbers, quoted values are text)"]
     ok = True
     if t == "text" or t == "binary":
         ok = isinstance(value, str)

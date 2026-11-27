@@ -97,18 +97,20 @@ def number_text(value: object) -> str:
 _PLAIN_ENUM_VALUE = re.compile(r'^[^|()"\s\\][^|()"\\]*(?<!\s)$')
 
 
-NUMBER_TOKEN = re.compile(r"-?\d+(?:\.\d+)?")
+NUMBER_TOKEN = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?")  # 01 is a code, not a number
 
 
-def make_enum(values: list, numbers: bool = False) -> str:
-    """``enum(a|b)``. With ``numbers`` the values are numbers and written bare:
-    ``enum(1|2|3)``. Text values that contain ``|``, brackets, quotes or spaces at
-    either end, or that look like a number, are written quoted:
-    ``enum(S|"M (medium)"|"L|XL")``, ``enum("1"|"2")``."""
+def make_enum(values: list, numbers: bool | None = False) -> str:
+    """``enum(a|b)``. Numbers are written bare: ``enum(1|2|3)``. Text that contains
+    ``|``, brackets, quotes or spaces at either end, or that looks like a number, is
+    written quoted: ``enum(S|"M (medium)"|"L|XL")``, ``enum("1"|"2")``.
+    ``numbers``: True, every value is a number; False, every value is text; None,
+    each value by its own type (JSON: 1 is a number, "1" is text)."""
     parts = []
     for v in values:
         text = str(v)
-        if numbers:
+        is_number = numbers is True or (numbers is None and isinstance(v, (int, float)) and not isinstance(v, bool))
+        if is_number:
             parts.append(number_text(text))
             continue
         plain = (

@@ -361,14 +361,7 @@ class SchemaWalker:
         enums = [o.get("enum", [o["const"]] if "const" in o else None) for o in options]
         if all(e is not None for e in enums):
             raw = [v for e in enums for v in (e or []) if v is not None]
-            values = list(dict.fromkeys(str(v) for v in raw))
-            return (
-                "has",
-                make_enum(
-                    values, bool(raw) and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in raw)
-                ),
-                "",
-            )
+            return "has", make_enum(list(dict.fromkeys(raw)), None), ""
         resolved = []
         for o in options:
             walker, node = self.resolve(o["$ref"]) if "$ref" in o else (self, o)
@@ -427,23 +420,9 @@ class SchemaWalker:
             return "has", "json", ""
         if "enum" in ps:
             raw = [v for v in ps["enum"] if v is not None]
-            values = [str(v) for v in raw]
-            return (
-                (
-                    "has",
-                    make_enum(values, all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in raw)),
-                    "",
-                )
-                if values
-                else ("has", "any", "")
-            )
+            return ("has", make_enum(raw, None), "") if raw else ("has", "any", "")
         if "const" in ps:
-            const = ps["const"]
-            return (
-                "has",
-                make_enum([str(const)], all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in [const])),
-                "",
-            )
+            return "has", make_enum([ps["const"]], None), ""
         t, fmt = ps.get("type"), ps.get("format")
         if t == "string":
             if fmt == "date":

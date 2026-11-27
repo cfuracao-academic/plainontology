@@ -143,6 +143,37 @@ _HARMLESS_ALTER = re.compile(
     r"OPTIMIZE|REBUILD|REPAIR|DISCARD|IMPORT)\s+PARTITION|ALTER\s+CHECK)",
     re.I,
 )
+_MYSQL_PARTITION_MAINTENANCE = re.compile(
+    r"\bALTER\s+TABLE\s+[`\"\w.]+\s+(?:(?:ADD|DROP|TRUNCATE|COALESCE|REORGANIZE|EXCHANGE|ANALYZE|CHECK|"
+    r"OPTIMIZE|REBUILD|REPAIR|DISCARD|IMPORT)\s+PARTITION|REMOVE\s+PARTITIONING|PARTITION\s+BY)\b[^;]*;",
+    re.I,
+)
+_TEXT_RE = re.compile(r"--[^\n]*|#[^\n]*|/\*.*?\*/|'(?:[^'\\]|\\.|'')*'|\"[^\"]*\"", re.S)
+
+
+def _sub_outside_text(sql: str, pattern: re.Pattern, repl) -> str:
+    """``pattern.sub(repl, sql)``, matching only where no string or comment is: the
+    pattern runs on a copy with strings and comments blanked, and the matched spans
+    of the original text are replaced."""
+    masked = _TEXT_RE.sub(lambda m: "".join("\n" if ch == "\n" else " " for ch in m[0]), sql)
+    out, last = [], 0
+    for m in pattern.finditer(masked):
+        out += [sql[last : m.start()], repl(_Span(sql, m))]  # groups give the original text
+        last = m.end()
+    return "".join(out) + sql[last:]
+
+
+class _Span:
+    """A match of the masked text, giving the original text for each group."""
+
+    def __init__(self, sql: str, masked_match: re.Match):
+        self.sql, self.m = sql, masked_match
+
+    def __getitem__(self, group):
+        start, end = self.m.span(group)
+        return self.sql[start:end] if start >= 0 else None
+
+
 _MYSQL_PARTITION = re.compile(
     r"(?P<create>CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?P<name>[`\"\w.]+)[^;]*?)"
     r"\s+PARTITION\s+BY\s+(?P<how>[^;]*?)(?=\s*;)",
@@ -342,10 +373,8 @@ class _Reader:
             target = ref.this if ref is not None else None
             if target is not None:
                 fk = ForeignKey(_columns(node), self.qual(target))
-                same = next((f for f in t.foreign_keys if f.columns == fk.columns and f.table == fk.table), None)
-                if same is None:
-                    t.foreign_keys.append(fk)
-                self.remember(t, name or f"{bare}_{'_'.join(fk.columns)}_fkey", "fk", same or fk)
+                t.foreign_keys.append(fk)  # one per declaration, so dropping one keeps the other
+                self.remember(t, name or f"{bare}_{'_'.join(fk.columns)}_fkey", "fk", fk)
         elif isinstance(node, exp.UniqueColumnConstraint):
             schema = node.this
             cols = _columns(schema)
@@ -659,7 +688,7 @@ class _Reader:
         t.notes.append(f"columns copied from {source.name.split('.')[-1]} (LIKE)")
         if include_all:  # MySQL copies the indexes with their names (not foreign keys)
             for (owner, cname), (ckind, value) in list(self.constraint_names.items()):
-                if owner == source.name and ckind in ("pk", "unique", "unique_set", "check"):
+                if owner == source.name and ckind in ("pk", "unique", "unique_set", "check", "index"):
                     self.constraint_names[(t.name, cname)] = (ckind, list(value) if isinstance(value, list) else value)
 
     def statement(self, node) -> None:
@@ -776,8 +805,18 @@ class _Reader:
                 self.enum_columns.append((col, key))
 
     def _mysql_partition(self, m: re.Match) -> str:
-        how = re.match(r"(?:LINEAR\s+)?\w+\s*(?:COLUMNS\s*)?\([^)]*\)|(?:LINEAR\s+)?KEY\s*\(\s*\)", m["how"], re.I)
-        text = " ".join((how[0] if how else m["how"].split("(")[0]).split()).replace("`", "")
+        how = m["how"]
+        head = re.match(r"((?:LINEAR\s+)?\w+(?:\s+COLUMNS)?)\s*", how, re.I)
+        text = head[1] if head else how.split("(")[0]
+        rest = how[head.end() :] if head else ""
+        if rest.startswith("("):  # the bracketed expression, nested brackets included
+            depth = 0
+            for i, ch in enumerate(rest):
+                depth += (ch == "(") - (ch == ")")
+                if depth == 0:
+                    text += " " + rest[: i + 1]
+                    break
+        text = " ".join(text.split()).replace("`", "")
         self.mysql_partitions.append((self.qual_text(m["name"]), f"partitioned by {text}"))
         return m["create"]
 
@@ -798,10 +837,13 @@ class _Reader:
                 name = new
             elif _is(action, "RenameColumn") and action.this is not None and action.args.get("to") is not None:
                 self.view_renames.append((name, action.this.name, action.args["to"].name))
-            elif not any(n == name for n, _q in self.views):
-                self.warnings.append(f"ALTER VIEW {name}: no such view in the file; skipped")
-            else:
-                self.warnings.append(f"skipped a statement it could not read: ALTER VIEW {name} ...")
+            elif isinstance(action, (exp.Select, exp.Union)) or _is(action, "SetOperation"):  # ALTER VIEW v AS ...
+                if any(n == name for n, _q in self.views):
+                    self.views = [(n, action if n == name else q) for n, q in self.views]
+                    self.view_renames = [r for r in self.view_renames if r[0] != name]
+                else:
+                    self.views.append((name, action))
+            # anything else (SET (...), ALTER COLUMN ... SET DEFAULT, OWNER TO) changes no column
 
     def index_owners(self, name: str, schema: str | None) -> list[str]:
         """Tables with an index or constraint called ``name`` in ``schema`` (or the
@@ -1057,8 +1099,10 @@ class _Reader:
             sql = _CHARSET_INTRODUCER.sub("'", sql)  # _utf8mb4'text' is just 'text'
             sql = _outside_quotes(sql, lambda part: re.sub(r"\bRENAME\s+AS\b", "RENAME TO", part, flags=re.I))
             # MySQL partitioning (PARTITION BY ... after the table options) is not read by
-            # the parser: take it off the statement and keep it as a note.
-            sql = _MYSQL_PARTITION.sub(self._mysql_partition, sql)
+            # the parser: take it off the statement and keep it as a note. Partition
+            # maintenance changes no column: those statements are left out.
+            sql = _sub_outside_text(sql, _MYSQL_PARTITION, self._mysql_partition)
+            sql = _sub_outside_text(sql, _MYSQL_PARTITION_MAINTENANCE, lambda m: ";")
             # The parser does not take float unsigned; decimal unsigned is read (same datatype, min 0).
             sql = _outside_quotes(sql, lambda part: _FLOAT_UNSIGNED.sub(r"DECIMAL\1 UNSIGNED", part))
         if self.dialect == "postgres":
