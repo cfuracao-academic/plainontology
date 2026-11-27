@@ -11,7 +11,7 @@
 
 **Write down the ontology your system already has, as one plain text file that people can edit and AI agents can read.**
 
-**Try it:** `pip install plainontology`, then `plainonto init my.onto --from sqlite:my.db`
+**Try it:** `pip install plainontology`, then `plainonto init my.onto --from sqlite:my.db`, or [paste a schema in your browser](https://huggingface.co/spaces/Chrisfuracao/plainontology) (nothing is uploaded)
 
 ![Demo: PlainOntology extracts a schema, a person adds definitions and synonyms, the database changes, drift is reported, and refresh keeps the person's lines](https://raw.githubusercontent.com/cfuracao-academic/plainontology/main/docs/demo.gif)
 

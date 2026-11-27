@@ -6,6 +6,7 @@
 - `Dockerfile` and `glama.json` for the Glama MCP directory; CI checks the image serves the MCP tools
 - The MCP server reports its version to clients (it sent an empty string)
 - Glama score badge in the README
+- README links the in-browser demo on Hugging Face Spaces
 
 ## 0.2.0 (27 November 2026)
 

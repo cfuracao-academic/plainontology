@@ -29,7 +29,7 @@
 ## Community and visibility
 
 - [x] README demo GIF: extract, edit, refresh, your edit survives (`docs/demo/make_demo.py`)
-- [ ] Hugging Face Space: paste a schema, get the file
+- [x] Hugging Face Space: paste a schema, get the file ([Chrisfuracao/plainontology](https://huggingface.co/spaces/Chrisfuracao/plainontology), runs in the browser)
 - [ ] Hugging Face dataset: PlainOntology files extracted from public OpenAPI specs
 - [x] Zenodo DOI for each release
 - [ ] Demo paper (ISWC, ESWC or SEMANTiCS demo track)
