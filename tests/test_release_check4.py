@@ -77,7 +77,8 @@ def test_comment_between_partition_by_and_the_method(tmp_path):
     _write(
         tmp_path,
         "h.sql",
-        "CREATE TABLE t (id int NOT NULL PRIMARY KEY) ENGINE=InnoDB PARTITION BY /* spread */ HASH (id) PARTITIONS 4;\n",
+        "CREATE TABLE t (id int NOT NULL PRIMARY KEY) ENGINE=InnoDB"
+        " PARTITION BY /* spread */ HASH (id) PARTITIONS 4;\n",
     )
     onto = extract_all(["mysql:h.sql"], tmp_path)
     assert [s.value for s in onto.concepts["T"].all("note")] == ["partitioned by HASH (id)"]
