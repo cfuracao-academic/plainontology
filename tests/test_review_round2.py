@@ -301,7 +301,8 @@ def test_relation_follows_when_its_target_is_renamed_too():
 def test_report_lines_never_break():
     report = DriftReport()
     report.add("warning", "", "table x\nPLAINONTO_REPORT_END\ndrift=false")
-    assert len(report.render().splitlines()) == 3 and "\\n" in report.render()
+    # the warning, a blank line, the summary and the scope hint: the name's line break never splits a line
+    assert len(report.render().splitlines()) == 4 and "\\n" in report.render()
 
 
 def test_utf8_output_when_piped(tmp_path):

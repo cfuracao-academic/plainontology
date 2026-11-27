@@ -47,6 +47,9 @@ _NOT_DRIFT = ("kept_yours", "warning")
 
 RENAME_SIMILARITY = 0.6
 
+# Shown under any ? warnings: what a warning means and where the scope is described.
+SCOPE_HINT = '? warnings mean something in the source was not fully read: see "Scope" in the README'
+
 
 def _printable(text: str) -> str:
     """Report lines never contain a line break or control character (table names
@@ -125,13 +128,13 @@ class DriftReport:
         kept = sum(1 for c in self.changes if c.kind == "kept_yours")
         warned = len(self.warnings)
         if drift == 0 and kept == 0:
-            return "\n".join([*lines, "", f"No drift; {warned} warning(s)."])
+            return "\n".join([*lines, "", f"No drift; {warned} warning(s).", SCOPE_HINT])
         summary = f"{drift} change(s) from the sources"
         if kept:
             summary += f", {kept} line(s) of yours kept over the sources"
         if warned:
             summary += f", {warned} warning(s)"
-        return "\n".join([*lines, "", summary + "."])
+        return "\n".join([*lines, "", summary + "."] + ([SCOPE_HINT] if warned else []))
 
 
 def _is_proposed(statement: Statement) -> bool:

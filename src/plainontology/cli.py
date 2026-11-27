@@ -25,6 +25,10 @@ def _cmd_init(args) -> int:
     print(f"Wrote {path}: {len(onto.concepts)} concepts, {props} properties from {len(onto.sources)} source(s).")
     for warning in report.warnings:
         print(warning.render())
+    if report.warnings:
+        from .merge import SCOPE_HINT
+
+        print(SCOPE_HINT)
     return 0
 
 

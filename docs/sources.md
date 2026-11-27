@@ -12,6 +12,10 @@ A source is written `KIND:LOCATION` and saved in the file (file paths relative t
 | `dbt` | a dbt manifest (`target/manifest.json`) or the project folder | included |
 | `tools` | AI agent tool definitions (Anthropic, OpenAI, MCP `tools/list`) | included |
 
+## Scope
+
+PlainOntology reads schemas by parsing their syntax, not by asking a running database. It is tested on output from pg_dump, mysqldump and SQLite, on Django, Rails, Laravel, Prisma and Flyway migrations, and on public schemas such as Pagila and Sakila. Hand-written SQL in unusual forms, vendor extensions and edge cases may fall outside what it reads. When a statement or column cannot be read, the report says so with a `?` warning rather than guessing. For the exact picture, point it at a live database or a fresh dump from your database tool.
+
 ## Databases
 
 Dumps are read in their own dialect; live databases through SQLAlchemy, read-only. Both give the same result, which CI checks against real PostgreSQL 16 and MySQL 8.4 servers.

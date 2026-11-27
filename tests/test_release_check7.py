@@ -71,3 +71,15 @@ def test_commented_out_triggers_make_no_notes(tmp_path):
     )
     notes = [s.value for c in onto.concepts.values() for s in c.all("note")]
     assert notes == ["trigger a_ai: AFTER INSERT"]
+
+
+def test_scope_hint_under_warnings(tmp_path, capsys):
+    from plainontology.cli import main
+
+    (tmp_path / "w.sql").write_text("CREATE TABLE a (id int primary key);\nALTER TABLE ghost ADD COLUMN x int;\n")
+    assert main(["init", str(tmp_path / "w.onto"), "--from", f"mysql:{(tmp_path / 'w.sql').as_posix()}"]) == 0
+    out = capsys.readouterr().out
+    assert 'see "Scope" in the README' in out
+    (tmp_path / "ok.sql").write_text("CREATE TABLE a (id int primary key);\n")
+    assert main(["init", str(tmp_path / "ok.onto"), "--from", f"mysql:{(tmp_path / 'ok.sql').as_posix()}"]) == 0
+    assert "Scope" not in capsys.readouterr().out

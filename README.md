@@ -228,6 +228,10 @@ concept NAME [auto: where it came from]
 
 Types: `text integer decimal boolean date datetime binary json any enum(a|b)`. Flags: `key required unique many`. The empty prefix line sets the base IRI for exports.
 
+## Scope
+
+PlainOntology reads schemas by parsing their syntax, not by asking a running database. It is tested on output from pg_dump, mysqldump and SQLite, on Django, Rails, Laravel, Prisma and Flyway migrations, and on public schemas such as Pagila and Sakila. Hand-written SQL in unusual forms, vendor extensions and edge cases may fall outside what it reads. When a statement or column cannot be read, the report says so with a `?` warning rather than guessing. For the exact picture, point it at a live database or a fresh dump from your database tool.
+
 ## Known limitations
 
 * To give an extracted concept a friendlier name, add a `label`; the concept name follows the source.
