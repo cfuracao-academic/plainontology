@@ -255,7 +255,7 @@ def _code_words(statement: str) -> list[str]:
     bare = _MYSQL_COMMENT.sub(lambda m: " " if m[1] is None else " x ", statement).upper()
     bare = re.sub(r"\b(IF|REPEAT)\s*\(", "FN(", bare)  # IF(...) and REPEAT(...) are functions
     bare = re.sub(r"\bIF\s+(NOT\s+)?EXISTS\b", "EXISTS_CHECK", bare)  # IF [NOT] EXISTS opens nothing
-    return re.findall(r"[A-Za-z_]+", bare)
+    return re.findall(r"(?<![.\w$])[A-Za-z_]+", bare)  # NEW.begin is a column, not BEGIN
 
 
 def _block_depth(words: list[str]) -> int:
@@ -270,7 +270,7 @@ def _block_depth(words: list[str]) -> int:
     return depth
 
 
-def _split_routines(sql: str) -> tuple[str, str]:
+def _split_routines(sql: str, warnings: list[str] | None = None) -> tuple[str, str]:
     """MySQL: (the SQL without stored routines, every statement in file order for the
     trigger notes). Statements are split by a scanner that knows strings, names,
     comments and DELIMITER blocks; a routine is recognised after its leading comments."""
@@ -286,9 +286,18 @@ def _split_routines(sql: str) -> tuple[str, str]:
             piece = pieces[k]
             if _ROUTINE.match(_MYSQL_COMMENT.sub(lambda m: m[1] if m[1] is not None else " ", piece).lstrip()):
                 if delimiter == ";":  # a body with ; inside: take pieces until its blocks close
-                    while _block_depth(_code_words(piece)) > 0 and k + 1 < len(pieces):
-                        k += 1
-                        piece += ";" + pieces[k]
+                    depth, j = _block_depth(_code_words(piece)), k
+                    while depth > 0 and j + 1 < len(pieces):
+                        j += 1
+                        depth += _block_depth(_code_words(pieces[j]))
+                    if depth > 0:  # never closes: set aside its first piece only, read the rest
+                        if warnings is not None:
+                            head = " ".join(piece.split())[:60]
+                            warnings.append(
+                                f"a routine whose blocks do not close; only its first line was skipped: {head}"
+                            )
+                    else:
+                        piece, k = ";".join(pieces[k : j + 1]), j
                 every.append(piece + ";")
             elif piece.strip():
                 kept.append(piece + ";")
@@ -296,7 +305,7 @@ def _split_routines(sql: str) -> tuple[str, str]:
             k += 1
 
     for line in sql.split("\n"):
-        switch = re.match(r"^\s*DELIMITER\s+(\S+)", line, re.I)
+        switch = re.match(r"^\s*DELIMITER\s+(\S+)\s*(?:(?:--\s|#).*)?$", line, re.I)
         if switch:
             flush()
             segment, delimiter = [], switch[1]
@@ -1211,7 +1220,9 @@ class _Reader:
             # Stored routines (procedures, functions, triggers, events) define no table and
             # their bodies confuse the parser: they are set aside, kept for the trigger notes.
             # Custom delimiters (DELIMITER $$ ... END$$) are resolved first.
-            sql, self.routines = _split_routines(sql)  # routines: every statement, for trigger notes
+            sql, every = _split_routines(sql, self.warnings)
+            # Every statement in file order, comments set aside, feeds the trigger notes.
+            self.routines = _MYSQL_COMMENT.sub(lambda m: m[1] if m[1] is not None else " ", every)
             sql = _MYSQL_COMMENT.sub(lambda m: m[1] if m[1] is not None else " ", sql)
             sql = _DELIMITER.sub("", sql).replace(";;", ";")
             sql = _MYSQL_VIEW_MODIFIERS.sub(lambda m: f"CREATE {m[1] or ''}VIEW", sql)
