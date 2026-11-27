@@ -25,7 +25,7 @@
 - LinkML: mixins for further parents, `unique_keys`, rules, multilingual labels (checked with the LinkML tools in CI)
 - Turtle: language tags, labels on properties, `owl:hasKey`
 
-**Upgrading from 0.1.x**: in enums you wrote yourself, a bare number now means a number; write text codes that look like numbers in quotes (`enum("1"|"2")`). Codes with leading zeros (`01`) stay text either way. Extracted enum lines are rewritten once on the first refresh. singular concept names are better (`movies` is `Movie`, not `Movy`; `shelves` is `Shelf`). A concept whose name changes this way is matched by rename detection when it has two or more properties; otherwise the first refresh reports it as removed (or kept, with your lines) and added. Run `plainonto drift` after upgrading and use `plainonto rename FILE Old New` where needed.
+**Upgrading from 0.1.x**: in enums you wrote yourself, a bare number now means a number; write text codes that look like numbers in quotes (`enum("1"|"2")`). Codes with leading zeros (`01`) stay text either way. Extracted enum lines are rewritten once on the first refresh (a union enum with values repeated across branches may also change order once). singular concept names are better (`movies` is `Movie`, not `Movy`; `shelves` is `Shelf`). A concept whose name changes this way is matched by rename detection when it has two or more properties; otherwise the first refresh reports it as removed (or kept, with your lines) and added. Run `plainonto drift` after upgrading and use `plainonto rename FILE Old New` where needed.
 
 **Before release: every remaining finding fixed** (no known issue is carried over to a later version)
 - With `PLAINONTO_SOURCE_ROOT` set, every command and the MCP server keep the `.onto` file (and a record file) inside it
@@ -37,6 +37,7 @@
 - A property kept because the match was unclear shows the `rename` command on every run
 - A file of blank lines keeps its size
 - `ALTER VIEW ... RENAME TO`, `RENAME COLUMN` and `AS SELECT ...` are applied, other `ALTER VIEW` options are quiet; `ALTER INDEX ... RENAME TO` stays in its schema; MySQL `ALTER TABLE t RENAME AS u` works; each part of a comma-separated `ALTER TABLE` counts
+- MySQL stored routines (procedures, functions, triggers, events) are set aside before reading, with any `DELIMITER` (`$$`, `//`, `##`, `;;`): a table after a routine is no longer lost; trigger notes stay
 - `CREATE TABLE b LIKE a` (MySQL) keeps the index names, so a later `DROP INDEX` finds them; dropping an ordinary (not unique) index is quiet
 - `CONVERT TO CHARACTER SET`, table options, partition maintenance, `TABLESPACE`, identity and column storage settings never warn
 

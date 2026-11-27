@@ -197,6 +197,42 @@ _CREATE_TABLE = re.compile(
 _COPY_BLOCK = re.compile(r"^COPY [^\n]*FROM stdin;\n.*?^\\\.\n?", re.M | re.S)
 _INSERTS = re.compile(r"^INSERT INTO [^\n]*;\n", re.M)
 _VERSIONED = re.compile(r"/\*!\d*\s*(.*?)\*/", re.S)
+_ROUTINE = re.compile(
+    r"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:DEFINER\s*=\s*\S+\s+)?(?:SQL\s+SECURITY\s+\w+\s+)?"
+    r"(?:AGGREGATE\s+)?(?:PROCEDURE|FUNCTION|TRIGGER|EVENT)\b",
+    re.I,
+)
+
+
+def _split_routines(sql: str) -> tuple[str, str]:
+    """MySQL: (the SQL without stored routines, the routines). Inside a DELIMITER block a
+    statement ends at the block's delimiter; outside, a routine is a single statement."""
+    kept: list[str] = []
+    routines: list[str] = []
+    delimiter, statement = ";", []
+    for line in sql.split("\n"):
+        switch = re.match(r"^\s*DELIMITER\s+(\S+)\s*$", line, re.I)
+        if switch:
+            delimiter = switch[1]
+            kept.append("")
+            continue
+        if delimiter == ";":
+            kept.append(line)
+            continue
+        statement.append(line)
+        if line.rstrip().endswith(delimiter):
+            text = "\n".join(statement).rstrip()[: -len(delimiter)].rstrip() + ";"
+            (routines if _ROUTINE.match(text) else kept).append(text)
+            statement = []
+    if statement:
+        kept.extend(statement)
+    # Routines written without DELIMITER (a single statement, like CREATE FUNCTION f() RETURN 1;)
+    rest: list[str] = []
+    for chunk in re.split(r"(?<=;)\n", "\n".join(kept)):
+        (routines if _ROUTINE.match(chunk) and "BEGIN" not in chunk.upper() else rest).append(chunk)
+    return "\n".join(rest), "\n".join(routines)
+
+
 _DELIMITER = re.compile(r"^DELIMITER\s+\S+\s*$", re.M | re.I)
 _IDENT = r'[`"]?([\w$]+)[`"]?'
 _DOMAIN = re.compile(
@@ -297,6 +333,7 @@ class _Reader:
         self.check_count: dict[str, int] = {}
         self.mysql_partitions: list[tuple[str, str]] = []  # (table, note) from PARTITION BY
         self.view_renames: list[tuple[str, str, str]] = []  # (view, old column, new column)
+        self.routines = ""  # MySQL stored routines, set aside before parsing
         self.enum_columns: list[tuple[Column, str]] = []  # columns typed by a PostgreSQL enum
         self.warnings: list[str] = []
         self.partition_of: dict[str, str] = {}  # partition -> parent table
@@ -1098,6 +1135,10 @@ class _Reader:
         if self.dialect == "mysql":
             # mysqldump hides views and triggers in /*!NNNNN ... */ comments.
             sql = _VERSIONED.sub(lambda m: " " + m[1] + " ", sql)
+            # Stored routines (procedures, functions, triggers, events) define no table and
+            # their bodies confuse the parser: they are set aside, kept for the trigger notes.
+            # Custom delimiters (DELIMITER $$ ... END$$) are resolved first.
+            sql, self.routines = _split_routines(sql)
             sql = _MYSQL_COMMENT.sub(lambda m: m[1] if m[1] is not None else " ", sql)
             sql = _DELIMITER.sub("", sql).replace(";;", ";")
             sql = _MYSQL_VIEW_MODIFIERS.sub(lambda m: f"CREATE {m[1] or ''}VIEW", sql)
@@ -1153,7 +1194,7 @@ class _Reader:
             if name in self.tables:
                 self.rename_column(self.tables[name], old, new)
         self.apply_comments()
-        self.triggers(sql)
+        self.triggers(sql + "\n" + self.routines)
         self.fold_partitions()
         for name, note in self.mysql_partitions:
             if name in self.tables:
