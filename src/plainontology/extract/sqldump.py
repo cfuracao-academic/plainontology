@@ -204,33 +204,106 @@ _ROUTINE = re.compile(
 )
 
 
+def _mysql_statements(text: str, delimiter: str) -> list[str]:
+    """Split MySQL text at ``delimiter``, never inside a string, a backtick name or a
+    comment. The pieces keep their comments; the delimiter is dropped."""
+    out: list[str] = []
+    start = i = 0
+    n = len(text)
+    comment_like = delimiter[:1] in "#-/"
+    while i < n:
+        ch = text[i]
+        if comment_like and text.startswith(delimiter, i):
+            out.append(text[start:i])
+            i += len(delimiter)
+            start = i
+            continue
+        if ch in "'\"`":
+            i += 1
+            while i < n:
+                if text[i] == "\\" and ch != "`":
+                    i += 2
+                    continue
+                if text[i] == ch:
+                    if i + 1 < n and text[i + 1] == ch:  # '' inside '...'
+                        i += 2
+                        continue
+                    break
+                i += 1
+            i += 1
+            continue
+        if (text.startswith("--", i) and (i + 2 >= n or text[i + 2] in " \t\r\n")) or ch == "#":
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        if not comment_like and text.startswith(delimiter, i):
+            out.append(text[start:i])
+            i += len(delimiter)
+            start = i
+            continue
+        i += 1
+    out.append(text[start:])
+    return out
+
+
+def _code_words(statement: str) -> list[str]:
+    """The upper-case words of a statement outside strings, names and comments."""
+    bare = _MYSQL_COMMENT.sub(lambda m: " " if m[1] is None else " x ", statement).upper()
+    bare = re.sub(r"\b(IF|REPEAT)\s*\(", "FN(", bare)  # IF(...) and REPEAT(...) are functions
+    bare = re.sub(r"\bIF\s+(NOT\s+)?EXISTS\b", "EXISTS_CHECK", bare)  # IF [NOT] EXISTS opens nothing
+    return re.findall(r"[A-Za-z_]+", bare)
+
+
+def _block_depth(words: list[str]) -> int:
+    """BEGIN, IF, CASE, LOOP, WHILE and REPEAT open a block; END closes one."""
+    depth = 0
+    for k, word in enumerate(words):
+        before = words[k - 1] if k else ""
+        if word == "END":
+            depth -= 1
+        elif word in ("BEGIN", "IF", "CASE", "LOOP", "WHILE", "REPEAT") and before != "END":
+            depth += 1
+    return depth
+
+
 def _split_routines(sql: str) -> tuple[str, str]:
-    """MySQL: (the SQL without stored routines, the routines). Inside a DELIMITER block a
-    statement ends at the block's delimiter; outside, a routine is a single statement."""
+    """MySQL: (the SQL without stored routines, every statement in file order for the
+    trigger notes). Statements are split by a scanner that knows strings, names,
+    comments and DELIMITER blocks; a routine is recognised after its leading comments."""
     kept: list[str] = []
-    routines: list[str] = []
-    delimiter, statement = ";", []
+    every: list[str] = []
+    delimiter = ";"
+    segment: list[str] = []
+
+    def flush() -> None:
+        pieces = _mysql_statements("\n".join(segment), delimiter)
+        k = 0
+        while k < len(pieces):
+            piece = pieces[k]
+            if _ROUTINE.match(_MYSQL_COMMENT.sub(lambda m: m[1] if m[1] is not None else " ", piece).lstrip()):
+                if delimiter == ";":  # a body with ; inside: take pieces until its blocks close
+                    while _block_depth(_code_words(piece)) > 0 and k + 1 < len(pieces):
+                        k += 1
+                        piece += ";" + pieces[k]
+                every.append(piece + ";")
+            elif piece.strip():
+                kept.append(piece + ";")
+                every.append(piece + ";")
+            k += 1
+
     for line in sql.split("\n"):
-        switch = re.match(r"^\s*DELIMITER\s+(\S+)\s*$", line, re.I)
+        switch = re.match(r"^\s*DELIMITER\s+(\S+)", line, re.I)
         if switch:
-            delimiter = switch[1]
-            kept.append("")
+            flush()
+            segment, delimiter = [], switch[1]
             continue
-        if delimiter == ";":
-            kept.append(line)
-            continue
-        statement.append(line)
-        if line.rstrip().endswith(delimiter):
-            text = "\n".join(statement).rstrip()[: -len(delimiter)].rstrip() + ";"
-            (routines if _ROUTINE.match(text) else kept).append(text)
-            statement = []
-    if statement:
-        kept.extend(statement)
-    # Routines written without DELIMITER (a single statement, like CREATE FUNCTION f() RETURN 1;)
-    rest: list[str] = []
-    for chunk in re.split(r"(?<=;)\n", "\n".join(kept)):
-        (routines if _ROUTINE.match(chunk) and "BEGIN" not in chunk.upper() else rest).append(chunk)
-    return "\n".join(rest), "\n".join(routines)
+        segment.append(line)
+    flush()
+    return "\n".join(kept), "\n".join(every)
 
 
 _DELIMITER = re.compile(r"^DELIMITER\s+\S+\s*$", re.M | re.I)
@@ -1138,7 +1211,7 @@ class _Reader:
             # Stored routines (procedures, functions, triggers, events) define no table and
             # their bodies confuse the parser: they are set aside, kept for the trigger notes.
             # Custom delimiters (DELIMITER $$ ... END$$) are resolved first.
-            sql, self.routines = _split_routines(sql)
+            sql, self.routines = _split_routines(sql)  # routines: every statement, for trigger notes
             sql = _MYSQL_COMMENT.sub(lambda m: m[1] if m[1] is not None else " ", sql)
             sql = _DELIMITER.sub("", sql).replace(";;", ";")
             sql = _MYSQL_VIEW_MODIFIERS.sub(lambda m: f"CREATE {m[1] or ''}VIEW", sql)
@@ -1194,7 +1267,7 @@ class _Reader:
             if name in self.tables:
                 self.rename_column(self.tables[name], old, new)
         self.apply_comments()
-        self.triggers(sql + "\n" + self.routines)
+        self.triggers(self.routines if self.dialect == "mysql" else sql)
         self.fold_partitions()
         for name, note in self.mysql_partitions:
             if name in self.tables:
