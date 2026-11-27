@@ -148,7 +148,11 @@ _MYSQL_PARTITION_MAINTENANCE = re.compile(
     r"OPTIMIZE|REBUILD|REPAIR|DISCARD|IMPORT)\s+PARTITION|REMOVE\s+PARTITIONING|PARTITION\s+BY)\b[^;]*;",
     re.I,
 )
-_TEXT_RE = re.compile(r"`[^`]*`|--[^\n]*|#[^\n]*|/\*.*?\*/|'(?:[^'\\]|\\.|'')*'|\"[^\"]*\"", re.S)
+_TEXT_RE = re.compile(r"`[^`]*`|'(?:[^'\\]|\\.|'')*'|\"(?:[^\"\\]|\\.)*\"", re.S)
+# MySQL comments outside strings and backtick names (they carry no schema meaning).
+_MYSQL_COMMENT = re.compile(
+    r"(`[^`]*`|'(?:[^'\\]|\\.|'')*'|\"(?:[^\"\\]|\\.)*\")|--[ \t][^\n]*|--$|#[^\n]*|/\*.*?\*/", re.S | re.M
+)
 
 
 def _sub_outside_text(sql: str, pattern: re.Pattern, repl) -> str:
@@ -818,7 +822,7 @@ class _Reader:
                     break
         text = " ".join(text.split()).replace("`", "")
         self.mysql_partitions.append((self.qual_text(m["name"]), f"partitioned by {text}"))
-        return m["create"]
+        return m["create"] + "\n"
 
     def alter_view(self, node) -> None:
         """ALTER VIEW v RENAME TO w, ALTER VIEW v RENAME COLUMN a TO b. Views are read
@@ -1094,6 +1098,7 @@ class _Reader:
         if self.dialect == "mysql":
             # mysqldump hides views and triggers in /*!NNNNN ... */ comments.
             sql = _VERSIONED.sub(lambda m: " " + m[1] + " ", sql)
+            sql = _MYSQL_COMMENT.sub(lambda m: m[1] if m[1] is not None else " ", sql)
             sql = _DELIMITER.sub("", sql).replace(";;", ";")
             sql = _MYSQL_VIEW_MODIFIERS.sub(lambda m: f"CREATE {m[1] or ''}VIEW", sql)
             sql = _CHARSET_INTRODUCER.sub("'", sql)  # _utf8mb4'text' is just 'text'

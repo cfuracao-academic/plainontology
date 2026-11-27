@@ -361,8 +361,13 @@ class SchemaWalker:
         enums = [o.get("enum", [o["const"]] if "const" in o else None) for o in options]
         if all(e is not None for e in enums):
             raw = [v for e in enums for v in (e or []) if v is not None]
-            unique = {json.dumps(v, sort_keys=True, default=str): v for v in reversed(raw)}  # objects too
-            return "has", make_enum(list(unique.values())[::-1], None), ""
+            unique: dict[str, object] = {}
+            for v in raw:  # first occurrence wins; objects and lists too; 2 and 2.0 are one value
+                number = isinstance(v, (int, float)) and not isinstance(v, bool)
+                unique.setdefault(
+                    f"n:{number_text(str(v))}" if number else json.dumps(v, sort_keys=True, default=str), v
+                )
+            return "has", make_enum(list(unique.values()), None), ""
         resolved = []
         for o in options:
             walker, node = self.resolve(o["$ref"]) if "$ref" in o else (self, o)
