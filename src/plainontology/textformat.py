@@ -351,12 +351,23 @@ def _preamble(onto: Ontology) -> list[str]:
     return out
 
 
+def _ends_in_comments_after_more(out: list[str], onto: Ontology) -> bool:
+    """The header written so far ends in comments with something else above them
+    (a source line, a blank line): with no gap, a reader would take those comments
+    as the first concept's own."""
+    header = out[onto.leading_blanks :]
+    run = 0
+    while run < len(header) and header[-1 - run].lstrip().startswith("#"):
+        run += 1
+    return 0 < run < len(header)
+
+
 def dumps(onto: Ontology) -> str:
     out = [""] * onto.leading_blanks + _preamble(onto)
     for i, concept in enumerate(onto.concepts.values()):
         gap = concept.blank_before if out else 0
-        if i == 0 and out and any(concept.leading_comments):
-            gap = max(gap, 1)  # keep its comments apart from the header
+        if i == 0 and out and (any(concept.leading_comments) or _ends_in_comments_after_more(out, onto)):
+            gap = max(gap, 1)  # keep the header's comments and the concept's own apart
         out.extend([""] * gap)
         out.extend(dump_concept(concept, first=i == 0))
     if onto.trailing_comments:

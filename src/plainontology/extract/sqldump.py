@@ -77,6 +77,14 @@ def _fold_identifiers(node):
         return node
 
 
+def _to_property(node) -> str | None:
+    """The new name in ALTER TABLE t RENAME col TO new (sqlglot keeps it as an option)."""
+    for option in node.args.get("options") or []:
+        if isinstance(option, exp.ToTableProperty) and option.this is not None:
+            return option.this.name
+    return None
+
+
 def _plain_string(m: re.Match) -> str:
     """PostgreSQL E'...' (backslash escapes) as a standard '...' string."""
     text = re.sub(r"\\(.)", lambda e: _E_ESCAPES.get(e[1], e[1]), m[1], flags=re.S)
@@ -94,11 +102,22 @@ _FLOAT_UNSIGNED = re.compile(r"\b(?:FLOAT|DOUBLE(?:\s+PRECISION)?|REAL)(\s*\([^)
 
 
 def _outside_quotes(sql: str, change) -> str:
-    """Apply ``change`` to the parts of ``sql`` outside quoted strings and identifiers."""
-    parts = re.split(r"('(?:[^'\\]|\\.|'')*'|`[^`]*`|\"[^\"]*\")", sql)
+    """Apply ``change`` to the parts of ``sql`` outside comments, quoted strings and
+    identifiers (a comment is skipped first, so an apostrophe in it starts no string)."""
+    parts = re.split(r"(--[^\n]*|#[^\n]*|/\*.*?\*/|'(?:[^'\\]|\\.|'')*'|`[^`]*`|\"[^\"]*\")", sql, flags=re.S)
     return "".join(part if i % 2 else change(part) for i, part in enumerate(parts))
 
 
+# ALTER TABLE statements that do not change what the file says about the table.
+_HARMLESS_ALTER = re.compile(
+    r"^(OWNER\s+TO|ENABLE|DISABLE|FORCE|NO\s+FORCE|SET\s*\(|RESET\s*\(|REPLICA\s+IDENTITY|CLUSTER|"
+    r"SET\s+WITHOUT|SET\s+TABLESPACE|SET\s+LOGGED|SET\s+UNLOGGED|SET\s+ACCESS\s+METHOD|ATTACH\s+PARTITION|"
+    r"DETACH\s+PARTITION|VALIDATE\s+CONSTRAINT|ALTER\s+CONSTRAINT|OF\s|NOT\s+OF|ROW\s+LEVEL|"
+    r"ALTER\s+(COLUMN\s+)?[\w\"]+\s+(SET|DROP)\s+(DEFAULT|STATISTICS|STORAGE|COMPRESSION)|"
+    r"ALTER\s+(COLUMN\s+)?[\w\"]+\s+(ADD|SET|DROP)\s+(GENERATED|IDENTITY|EXPRESSION)|"
+    r"ALTER\s+(COLUMN\s+)?[\w\"]+\s+RESTART)",
+    re.I,
+)
 _WITH_DATA = re.compile(r"\bWITH\s+(?:NO\s+)?DATA\s*;", re.I)
 # MySQL view modifiers the SQL parser does not know; they change nothing about the columns.
 _MYSQL_VIEW_MODIFIERS = re.compile(
@@ -337,11 +356,7 @@ class _Reader:
         datatype, many, length = self.datatype(kind_node)
         col = Column(item.name, datatype, many=many, max_length=length)
         col.unsigned = kind_node is not None and getattr(kind_node.this, "name", "") in _UNSIGNED
-        base = kind_node.expressions[0] if kind_node is not None and many and kind_node.expressions else kind_node
-        if base is not None and getattr(base.this, "name", "") == "USERDEFINED":
-            key = base.sql(self.dialect).split(".")[-1].strip('"`').lower()
-            if key in self.enums:  # ALTER TYPE ... ADD VALUE later changes this column too
-                self.enum_columns.append((col, key))
+        self.track_enum(col, kind_node)
         if kind_node is not None and getattr(kind_node.this, "name", "") == "USERDEFINED":
             domain = self.domains.get(kind_node.sql(self.dialect).split(".")[-1].strip('"`').lower())
             if domain:
@@ -482,6 +497,17 @@ class _Reader:
                     fk.table = new
 
     def alter(self, node) -> None:
+        kind = (node.args.get("kind") or "TABLE").upper()
+        if kind == "INDEX":  # ALTER INDEX a RENAME TO b (PostgreSQL)
+            for action in node.args.get("actions") or []:
+                if _is(action, "AlterRename") and action.this is not None:
+                    old = node.this.name.lower()
+                    for owner, cname in list(self.constraint_names):
+                        if cname == old:
+                            self.rename_constraint(owner, old, action.this.name)
+            return
+        if kind != "TABLE":
+            return
         name = self.qual(node.this)
         if name not in self.tables:
             self.warnings.append(f"ALTER TABLE {name}: no such table in the file; skipped")
@@ -523,12 +549,17 @@ class _Reader:
                     continue
                 if action.args.get("dtype") is not None:
                     col.datatype, col.many, col.max_length = self.datatype(action.args["dtype"])
+                    self.enum_columns = [(c, k) for c, k in self.enum_columns if c is not col]
+                    self.track_enum(col, action.args["dtype"])
                 if action.args.get("allow_null") is False:
                     col.not_null = True
                 elif action.args.get("drop") and action.args.get("allow_null"):
                     col.not_null = False
             elif _is(action, "RenameColumn"):
                 self.rename_column(t, action.this.name, action.args["to"].name)
+            elif _is(action, "AlterRename") and action.this is not None and (new_column := _to_property(node)):
+                # ALTER TABLE t RENAME col TO new: COLUMN is optional in PostgreSQL
+                self.rename_column(t, action.this.name, new_column)
             elif _is(action, "AlterRename") and action.this is not None:
                 schema = node.this.args.get("db")
                 new = qualified(
@@ -564,7 +595,7 @@ class _Reader:
             elif isinstance(prop, exp.InheritsProperty):
                 t.inherits += [self.qual(parent) for parent in prop.expressions]
 
-    def like(self, t: Table, node) -> None:
+    def like(self, t: Table, node, include_all: bool = False) -> None:
         """CREATE TABLE t (LIKE other INCLUDING ...): copy the other table's columns
         (with NOT NULL, as PostgreSQL does) and, when included, its keys and checks."""
         source = self.tables.get(self.qual(node.this))
@@ -575,7 +606,7 @@ class _Reader:
             str(p.args.get("value").name if p.args.get("value") is not None else "").upper()
             for p in node.expressions
             if str(p.name).upper() == "INCLUDING"
-        }
+        } | ({"ALL"} if include_all else set())
         for c in source.columns:
             if t.column(c.name) is None:
                 t.columns.append(copied := copy.deepcopy(c))
@@ -591,8 +622,22 @@ class _Reader:
     def statement(self, node) -> None:
         if isinstance(node, exp.Create):
             kind = (node.args.get("kind") or "").upper()
+            like = next(
+                (
+                    p
+                    for p in (node.args.get("properties") or exp.Properties()).expressions
+                    if isinstance(p, exp.LikeProperty)
+                ),
+                None,
+            )
             if kind == "TABLE" and isinstance(node.this, exp.Schema):
                 self.create_table(node)
+            elif kind == "TABLE" and like is not None:  # MySQL CREATE TABLE b LIKE a: columns and indexes
+                name = self.qual(node.this)
+                if not (node.args.get("exists") and name in self.tables and self.tables[name].columns):
+                    self.tables[name] = Table(name)
+                    self.forget_constraints(name)
+                    self.like(self.tables[name], like, include_all=True)
             elif kind == "TABLE" and node.args.get("expression") is not None:  # CREATE TABLE ... AS SELECT
                 name = self.qual(node.this)
                 self.views.append((name, node.args["expression"]))
@@ -664,6 +709,8 @@ class _Reader:
                 parts = re.split(r"\s+TO\s+", pair.strip(), flags=re.I)
                 if len(parts) == 2:
                     self.rename_table(self.qual_text(parts[0]), self.qual_text(parts[1]))
+            if not pairs:
+                self.warnings.append(f"skipped a statement it could not read: RENAME {text[:60]}")
         elif isinstance(node, exp.Drop) and (node.args.get("kind") or "").upper() in ("TABLE", "VIEW"):
             for target in node.args.get("tables") or []:
                 name = self.qual(target)
@@ -671,6 +718,15 @@ class _Reader:
                 self.forget_constraints(name)
                 self.views = [(n, q) for n, q in self.views if n != name]
                 self.table_comments.pop(name, None)
+
+    def track_enum(self, col: Column, kind_node) -> None:
+        """Remember a column typed by a PostgreSQL enum: ALTER TYPE ... ADD VALUE later
+        changes the column too."""
+        base = kind_node.expressions[0] if kind_node is not None and col.many and kind_node.expressions else kind_node
+        if base is not None and getattr(base.this, "name", "") == "USERDEFINED":
+            key = base.sql(self.dialect).split(".")[-1].strip('"`').lower()
+            if key in self.enums:
+                self.enum_columns.append((col, key))
 
     def drop_index(self, name: str, table: str | None, schema: str | None = None) -> None:
         """DROP INDEX: undo a unique index (other indexes do not change the file).
@@ -697,11 +753,15 @@ class _Reader:
         """ALTER statements the parser keeps as text: PostgreSQL ALTER TYPE on an enum,
         ALTER TABLE ... SET SCHEMA and ALTER TABLE ... RENAME CONSTRAINT."""
         flat = " ".join(text.split())
-        table = re.match(r"^TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?([\w.\"`]+)\s+(.*)$", flat, re.I)
+        table = re.match(
+            r"^TABLE\s+(?:(?:ONLY|IF\s+EXISTS)\s+)*([\w.\"`]+)\s+(.*)$", flat, re.I
+        )  # ONLY and IF EXISTS in either order
         if table:
             name, rest = self.qual_text(table[1]), table[2]
             schema = re.match(r"^SET\s+SCHEMA\s+([\w\"]+)$", rest, re.I)
             renamed = re.match(r"^RENAME\s+CONSTRAINT\s+([\w\"]+)\s+TO\s+([\w\"]+)$", rest, re.I)
+            inherit = re.match(r"^(NO\s+)?INHERIT\s+([\w.\"]+)$", rest, re.I)
+            check = re.match(r"^ADD\s+CHECK\s*\((.*)\)(?:\s+NOT\s+VALID)?$", rest, re.I)
             if schema:
                 bare = name.split(".")[-1]
                 new_schema = schema[1].strip('"')
@@ -710,6 +770,17 @@ class _Reader:
                 )
             elif renamed and name in self.tables:
                 self.rename_constraint(name, renamed[1].strip('"'), renamed[2].strip('"'))
+            elif inherit and name in self.tables:
+                parent = self.qual_text(inherit[2])
+                t = self.tables[name]
+                t.inherits = [p for p in t.inherits if p != parent] + ([] if inherit[1] else [parent])
+            elif check and name in self.tables:
+                try:
+                    self.add_check(self.tables[name], sqlglot.parse_one(check[1], read=self.dialect), None)
+                except SqlglotError:
+                    self.warnings.append(f"skipped a statement it could not read: ALTER {flat[:60]}")
+            elif not _HARMLESS_ALTER.match(rest):
+                self.warnings.append(f"skipped a statement it could not read: ALTER {flat[:60]}")
             return
         m = _ALTER_TYPE.match(flat)
         if not m:

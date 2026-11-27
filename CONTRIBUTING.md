@@ -18,7 +18,7 @@ ruff check src tests && ruff format --check src tests && mypy && pytest --cov --
 
 ## Ground rules
 
-1. **Never overwrite a person's line.** Any change to merge must keep the refresh rules in [SPEC.md](SPEC.md) and the tests in `tests/test_merge.py` passing.
+1. **Never overwrite a person's line.** Any change to merge must keep the refresh rules in [SPEC.md](SPEC.md) and the tests in `tests/test_merge.py` passing. `tests/test_fuzz.py` writes and refreshes thousands of random files on every run; when it fails, its seed reproduces the case. Run it with `PLAINONTO_FUZZ_SCALE=50` before changing `textformat.py` or `merge.py`.
 2. **Keep the core dependency-free.** Only the standard library in `src/plainontology`, except `mcp_server.py`. New extractors that need a library go behind an optional extra.
 3. **Format changes need a spec change.** If the text format changes, update SPEC.md in the same pull request.
 4. **Test with public data only.** Examples and fixtures must be public or made up.

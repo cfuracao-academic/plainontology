@@ -27,6 +27,15 @@
 
 **Upgrading from 0.1.x**: singular concept names are better (`movies` is `Movie`, not `Movy`; `shelves` is `Shelf`). A concept whose name changes this way is matched by rename detection when it has two or more properties; otherwise the first refresh reports it as removed (or kept, with your lines) and added. Run `plainonto drift` after upgrading and use `plainonto rename FILE Old New` where needed.
 
+**Fixes from a ninth independent review** (the last before release; non-blocking findings are open issues for 0.2.1)
+- PostgreSQL `ALTER TABLE t RENAME col TO new` (without the word COLUMN) renames the column, not the table
+- An enum column changed by `ALTER COLUMN ... TYPE` follows a later `ALTER TYPE ... ADD VALUE` (Prisma's enum migrations)
+- MySQL `CREATE TABLE b LIKE a` copies the table
+- Refresh and `rename` write normally when the first concept goes and the header ends in a comment
+- Any `ALTER TABLE`, `ALTER INDEX` or `RENAME` statement that is not applied is a `?` warning, except ones that change nothing in the file (`OWNER TO`, `ENABLE ...`, `SET (...)` and similar); unnamed `ADD CHECK`, `INHERIT` and `ALTER INDEX ... RENAME TO` are applied, and `IF EXISTS` and `ONLY` are read in either order
+- An apostrophe in a SQL comment no longer upsets the reading of MySQL `float unsigned`
+- `tests/test_fuzz.py` runs on every push: random files written and refreshed with people's edits, which would have caught the regressions of the seventh and eighth reviews
+
 **Fixes from an eighth independent review**
 - Refresh and `rename` no longer stop with "refusing to write" when the first concept goes and the next one has a comment banner with a blank line under it
 - A column-0 comment among comments under a property keeps its order
