@@ -15,6 +15,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
+from . import __version__
 from .api import compare
 from .check import validate_record as _validate
 from .model import CHILD_KINDS, RULE_KINDS, Concept, Ontology, Tag
@@ -70,7 +71,7 @@ def build_server(path: Path, allow_proposals: bool = False) -> MCPServer:
     from .extract import within_root
 
     path = within_root(Path(path))  # with PLAINONTO_SOURCE_ROOT set, the file must be inside it
-    server = MCPServer(name="plainontology", instructions=INSTRUCTIONS)
+    server = MCPServer(name="plainontology", version=__version__, instructions=INSTRUCTIONS)
 
     @server.tool()
     def list_concepts() -> str:

@@ -7,6 +7,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%20to%203.13-blue)](pyproject.toml)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-green)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24562420.svg)](https://doi.org/10.5281/zenodo.24562420)
+[![plainontology MCP server](https://glama.ai/mcp/servers/cfuracao-academic/plainontology/badges/score.svg)](https://glama.ai/mcp/servers/cfuracao-academic/plainontology)
 
 **Write down the ontology your system already has, as one plain text file that people can edit and AI agents can read.**
 

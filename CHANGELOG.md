@@ -4,7 +4,8 @@
 
 - Listed in the official MCP Registry as `io.github.cfuracao-academic/plainontology` (`server.json`; the README carries the registry's ownership line). Each release now publishes the registry entry after PyPI
 - `Dockerfile` and `glama.json` for the Glama MCP directory; CI checks the image serves the MCP tools
-- No code changes
+- The MCP server reports its version to clients (it sent an empty string)
+- Glama score badge in the README
 
 ## 0.2.0 (27 November 2026)
 
